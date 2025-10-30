@@ -28,6 +28,9 @@ let currentStudyItem = null;
 let currentStudyChatHistory = [];
 let isEditMode = false;
 
+// CEFR Level filtering
+let selectedLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'C3', 'Custom']; // All levels selected by default
+
 // Initialize API key from storage
 async function initializeAPIKey() {
     try {
@@ -875,15 +878,28 @@ async function processSubtitleBatches(subtitleData) {
             
             const batchPrompt = `Translate ALL ${batch.length} Swedish subtitle entries below. Return JSON with "translations" array containing exactly ${batch.length} entries.
 
+IMPORTANT: Extract important Swedish words and expressions from the entries. For each expression, assign a CEFR level (A1, A2, B1, B2, C1, C2, or C3) based on the difficulty/complexity of the word or expression.
+
 Format:
 {
   "translations": [
     {"swedish": "text", "literal": "translation", "natural": "natural translation (if different)"}
   ],
   "expressions": [
-    {"word": "word", "meaning": "meaning", "example": "example"}
+    {"word": "word", "meaning": "meaning", "example": "example", "level": "A1"}
   ]
 }
+
+CEFR Level Guidelines:
+- A1: Very basic words (hello, yes, no, numbers, simple verbs)
+- A2: Basic everyday words (common verbs, nouns, simple phrases)
+- B1: Intermediate words (common expressions, moderate complexity)
+- B2: Upper-intermediate words (more complex expressions, idioms)
+- C1: Advanced words (sophisticated vocabulary, complex phrases)
+- C2: Very advanced words (near-native level, nuanced expressions)
+- C3: Expert level (highly specialized or literary language)
+
+Extract MORE expressions - aim for 5-15 important words/expressions per batch. Include verbs, nouns, adjectives, phrases, and idiomatic expressions that would be useful for learning Swedish.
 
 Entries:
 ${batchText}`;
@@ -1522,6 +1538,27 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             analyzeBtn.textContent = 'Analyze';
         }
     });
+    
+    // Level filter checkboxes event handlers
+    const levelCheckboxes = document.querySelectorAll('.level-checkbox');
+    levelCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            const level = e.target.value;
+            if (e.target.checked) {
+                // Add level to selected levels if not already present
+                if (!selectedLevels.includes(level)) {
+                    selectedLevels.push(level);
+                }
+            } else {
+                // Remove level from selected levels
+                selectedLevels = selectedLevels.filter(l => l !== level);
+            }
+            // Refresh expressions display with new filter
+            if (currentAnalysis) {
+                displayExpressions();
+            }
+        });
+    });
 
 // Display analysis results
 function displayAnalysis(data) {
@@ -1754,11 +1791,12 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             throw new Error('Invalid response from API');
         }
         
-        // Create expression object
+        // Create expression object with "Custom" level for user-added expressions
         const newExpression = fixTranslationEncoding({
             word: word,
             meaning: meaningResponse.trim(),
-            example: ''
+            example: '',
+            level: 'Custom'
         });
         
         // Associate expression with current translation if study modal is open
@@ -2989,9 +3027,22 @@ function displayExpressions() {
     
     expressionsContent.innerHTML = '';
     
-    currentAnalysis.expressions.forEach((expr, index) => {
+    // Filter expressions based on selected levels
+    const filteredExpressions = currentAnalysis.expressions.filter(expr => {
+        // If expression has no level field, show it (backward compatibility)
+        if (!expr.level) {
+            return true;
+        }
+        // Only show expressions matching selected levels
+        return selectedLevels.includes(expr.level);
+    });
+    
+    filteredExpressions.forEach((expr) => {
         const item = document.createElement('div');
         item.className = 'expression-item';
+        
+        // Find original index in full expressions array
+        const originalIndex = currentAnalysis.expressions.findIndex(e => e === expr);
         
         // Find timestamp for expression if it appears in subtitle text
         const timestamp = findTimestampForText(expr.word);
@@ -3015,7 +3066,7 @@ function displayExpressions() {
         html += `</div></div>`;
         
         item.innerHTML = html;
-        item.addEventListener('click', () => openStudyModal('expression', expr, index));
+        item.addEventListener('click', () => openStudyModal('expression', expr, originalIndex));
         expressionsContent.appendChild(item);
     });
 }
@@ -3443,11 +3494,12 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         
         console.log('Creating expression:', { dictionaryForm, meaningText });
         
-        // Create expression object
+        // Create expression object with "Custom" level for user-added expressions
         const newExpression = fixTranslationEncoding({
             word: dictionaryForm,
             meaning: meaningText,
-            example: ''
+            example: '',
+            level: 'Custom'
         });
         
         // Associate expression with current translation if study modal is open

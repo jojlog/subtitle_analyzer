@@ -1,52 +1,28 @@
-<!-- 6ed2a57a-6d97-4014-8da0-90c8fd307d6b f0ff766e-42d1-4eea-bdb8-c78fec740867 -->
-# Fix Analysis Progress Visibility and Warning Dialog
+<!-- 6ed2a57a-6d97-4014-8da0-90c8fd307d6b bd67c695-1a33-4930-b704-509935777e63 -->
+# Replace Level Checkboxes with Dropdown, Autosave, and Fix Delete Bug
 
-## Problem Analysis
+## Step-by-Step Implementation Plan
 
-1. Warning currently shows when clicking home button during analysis (should only show when opening saved files)
-2. Analysis progress (analyzeBtn with "Analyzing..." text) is hidden when saved files view opens
-3. Analysis already continues in background but user can't see progress
+### Phase 1: Replace Checkboxes with Dropdown Menu
 
-## Changes Required
+#### Step 1.1: Update HTML structure for dropdown
 
-### 1. Move warning dialog from homeBtn to savedAnalysesBtn
+- **File**: `index.html` (lines 74-110)
+- Remove existing `.level-filter-section` with inline checkboxes
+- Create new dropdown structure:
+  - Add button element: `<button class="level-filter-btn">Filter by CEFR Level: [All ▼]</button>`
+  - Add dropdown container: `<div class="level-dropdown" style="display: none;">`
+  - Inside dropdown: Add "ALL" checkbox with separator line
+  - Add individual level checkboxes (A1, A2, B1, B2, C1, C2, C3, Custom)
 
-- **File**: `renderer.js` (lines 588-613)
-- Remove the warning check from `homeBtn` click handler
-- Allow going home without warning (analysis continues in background anyway)
+#### Step 1.2: Add CSS for dropdown
 
-- **File**: `renderer.js` (lines 1641-1652)
-- Add warning check to `savedAnalysesBtn` click handler
-- Show warning only when `isAnalyzing === true`
-- If user cancels, don't open saved files view
-- If user confirms, proceed to open saved files view
+- **File**: `styles.css`
+- Replace `.level-filter-section` styles with dropdown styles
+- Style `.level-filter-btn` (button appearance with arrow indicator)
+- Style `.level-dropdown` (position absolute, hidden by default, appears on click)
+- Style `.level-dropdown-checkbox` (checkboxes inside dropdown)
+- Add separator styling after "ALL" option
+- Add hover/transition effects
 
-### 2. Keep processing status visible during analysis
-
-- **File**: `renderer.js` (lines 1641-1652)
-- When opening saved files view during analysis (`isAnalyzing === true`):
-- Don't hide `uploadSection` - keep it visible so `analyzeBtn` with "Analyzing..." text remains visible
-- Only hide `resultsSection` if it exists and analysis hasn't completed yet
-- When opening saved files view when NOT analyzing:
-- Keep current behavior (hide both uploadSection and resultsSection)
-
-### 3. Ensure analysis completes and switches to results
-
-- **File**: `renderer.js` (lines 1132-1149)
-- When analysis completes while user is in saved files view:
-- Automatically switch from saved files view to results view
-- Hide savedAnalysesView, show resultsSection
-- This ensures user sees completed analysis immediately
-
-### 4. Reset analyzeBtn state properly
-
-- **File**: `renderer.js` (lines 1186-1189)
-- Ensure analyzeBtn text and state reset correctly in finally block
-- This happens regardless of which view is active
-
-## Implementation Details
-
-- Analysis continues in background via async/await - no changes needed
-- Progress is tracked via `isAnalyzing` flag and `analyzeBtn.textContent` updates
-- When saved files opens during analysis, uploadSection stays visible showing the analyzing button
-- When analysis completes, user is automatically switched to results view
+#### Step 1.3: Implement dropd

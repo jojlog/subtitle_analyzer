@@ -1329,6 +1329,17 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             meaning: meaningResponse.trim(),
             example: ''
         });
+        
+        // Associate expression with current translation if study modal is open
+        if (currentStudyItem && currentStudyItem.type === 'translation') {
+            newExpression.translationIndex = currentStudyItem.index;
+            newExpression.translationText = currentStudyItem.item.swedish;
+            console.log('Associated expression with translation from main chat:', {
+                index: currentStudyItem.index,
+                swedish: currentStudyItem.item.swedish
+            });
+        }
+        
         if (!currentAnalysis.expressions) {
             currentAnalysis.expressions = [];
         }
@@ -2112,41 +2123,22 @@ function openStudyModal(type, item, index, timestamp = null) {
         
         studyItemContent.innerHTML = html;
         
-        // Find and display related expressions/words
+        // Display related expressions using displayStudyExpressions() for consistency
+        displayStudyExpressions();
+        
+        // Get related expressions for chat context (used in system message)
         let relatedExpressions = [];
         if (currentAnalysis && currentAnalysis.expressions && currentAnalysis.expressions.length > 0) {
             const swedishText = item.swedish.toLowerCase();
             relatedExpressions = currentAnalysis.expressions.filter(expr => {
+                // Check by translationIndex first
+                if (expr.translationIndex !== undefined && expr.translationIndex === index) {
+                    return true;
+                }
+                // Fallback: check if word appears in Swedish text
                 const word = expr.word.toLowerCase();
-                // Check if the expression word appears in the Swedish text
                 return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
             });
-            
-            if (relatedExpressions.length > 0) {
-                relatedExpressions.forEach(expr => {
-                    const exprDiv = document.createElement('div');
-                    exprDiv.className = 'study-expression-item';
-                    
-                    let exprHtml = `<div class="study-expression-header">`;
-                    exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
-                    exprHtml += `</div>`;
-                    if (expr.meaning) {
-                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
-                    }
-                    if (expr.example) {
-                        exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
-                    }
-                    
-                    exprDiv.innerHTML = exprHtml;
-                    studyExpressionsContent.appendChild(exprDiv);
-                });
-            } else {
-                // Show empty state message
-                studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-            }
-        } else {
-            // Show empty state message
-            studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
         }
         
         // Initialize chat with context
@@ -2258,13 +2250,35 @@ function displayStudyExpressions() {
         return;
     }
     
-    // If we have a current study item (translation), show related expressions
-    // Otherwise, show all expressions (for example, when adding from chat)
+    // Filter expressions based on current study item
     let expressionsToShow = [];
     
-    // Always show all expressions - don't filter by translation context
-    // This ensures newly added expressions are always visible
-    expressionsToShow = currentAnalysis.expressions;
+    if (currentStudyItem && currentStudyItem.type === 'translation') {
+        // Filter expressions that belong to this translation
+        const currentTranslationIndex = currentStudyItem.index;
+        const currentSwedishText = currentStudyItem.item.swedish.toLowerCase();
+        
+        expressionsToShow = currentAnalysis.expressions.filter(expr => {
+            // Check if expression is associated with this translation by index
+            if (expr.translationIndex !== undefined && expr.translationIndex === currentTranslationIndex) {
+                return true;
+            }
+            
+            // Backward compatibility: include expressions where the word appears in the Swedish text
+            // (for expressions added before this feature or from main chat without translationIndex)
+            if (expr.translationIndex === undefined) {
+                const exprWord = expr.word.toLowerCase();
+                // Check if the expression word appears in the Swedish text
+                return currentSwedishText.includes(exprWord) || exprWord.split(' ').some(w => currentSwedishText.includes(w));
+            }
+            
+            // Exclude expressions associated with other translations
+            return false;
+        });
+    } else {
+        // If no study item or it's an expression type, show empty
+        expressionsToShow = [];
+    }
     
     if (expressionsToShow.length > 0) {
         expressionsToShow.forEach(expr => {
@@ -2641,6 +2655,16 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             meaning: meaningText,
             example: ''
         });
+        
+        // Associate expression with current translation if study modal is open
+        if (currentStudyItem && currentStudyItem.type === 'translation') {
+            newExpression.translationIndex = currentStudyItem.index;
+            newExpression.translationText = currentStudyItem.item.swedish;
+            console.log('Associated expression with translation:', {
+                index: currentStudyItem.index,
+                swedish: currentStudyItem.item.swedish
+            });
+        }
         
         if (!currentAnalysis.expressions) {
             currentAnalysis.expressions = [];

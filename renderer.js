@@ -31,6 +31,9 @@ let isEditMode = false;
 // CEFR Level filtering
 let selectedLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'C3', 'Custom']; // All levels selected by default
 
+// CEFR Level filtering for study modal (separate from main view)
+let selectedStudyLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'C3', 'Custom']; // All levels selected by default
+
 // Initialize API key from storage
 async function initializeAPIKey() {
     try {
@@ -792,7 +795,7 @@ function formatTimeRemaining(seconds) {
 }
 
 // Process subtitle entries in batches to handle large files
-async function processSubtitleBatches(subtitleData) {
+async function processSubtitleBatches(subtitleData, placeholderId = null) {
     const BATCH_SIZE_ENTRIES = 300; // Reduced to prevent timeout - smaller batches process faster
     const MAX_CHARS_PER_BATCH = 12000; // Reduced to prevent timeout - smaller prompts are faster
     const batches = [];
@@ -838,6 +841,7 @@ async function processSubtitleBatches(subtitleData) {
     
     // Process each batch sequentially
     let globalEntryIndex = 0;
+    let lastProgressUpdate = -1; // Track last progress percentage updated
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
         const batchNumber = batchIndex + 1;
@@ -1091,6 +1095,44 @@ ${missingText}`;
             
             console.log(`Batch ${batchNumber}/${batches.length} complete: ${batchData.translations?.length || 0} translations (took ${(batchDuration / 1000).toFixed(1)}s)`);
             
+            // Update placeholder progress (throttled: only every 25%)
+            if (placeholderId) {
+                const progress = Math.round((batchNumber / batches.length) * 100);
+                // Only update if progress crossed a 25% threshold
+                const progressThreshold = Math.floor(progress / 25) * 25;
+                if (progressThreshold > lastProgressUpdate) {
+                    lastProgressUpdate = progressThreshold;
+                    // Update progress asynchronously (non-blocking)
+                    setTimeout(async () => {
+                        try {
+                            let saved = [];
+                            if (window.electronAPI) {
+                                const result = await window.electronAPI.loadAnalyses();
+                                if (result.success) {
+                                    saved = result.data || [];
+                                }
+                            }
+                            
+                            const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
+                            if (placeholderIndex !== -1) {
+                                saved[placeholderIndex].progress = progress;
+                                
+                                if (window.electronAPI) {
+                                    await window.electronAPI.saveAnalyses(saved);
+                                }
+                                
+                                // Refresh saved files view if it's open
+                                if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                                    await loadSavedAnalyses();
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error updating placeholder progress:', error);
+                        }
+                    }, 0);
+                }
+            }
+            
         } catch (error) {
             console.error(`Error processing batch ${batchNumber}:`, error);
             // Continue with next batch even if this one fails
@@ -1187,11 +1229,63 @@ async function analyzeProject(projectId) {
     analyzeBtn.disabled = true;
     analyzeBtn.textContent = 'Analyzing...';
     
+    // Create placeholder saved analysis entry with processing status
+    let placeholderId = null;
+    if (project.fileName) {
+        try {
+            placeholderId = Date.now().toString();
+            const placeholderAnalysis = {
+                id: placeholderId,
+                fileName: project.fileName,
+                date: new Date().toISOString(),
+                status: 'processing',
+                progress: 0,
+                analysis: null,
+                chatHistory: [],
+                subtitleData: null
+            };
+            
+            // Get existing saved analyses
+            let saved = [];
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadAnalyses();
+                if (result.success) {
+                    saved = result.data || [];
+                }
+            }
+            
+            // Remove any existing placeholder for this file
+            saved = saved.filter(item => !(item.fileName === project.fileName && item.status === 'processing'));
+            
+            // Add placeholder
+            saved.push(placeholderAnalysis);
+            
+            // Keep only last 50 analyses
+            if (saved.length > 50) {
+                saved.shift();
+            }
+            
+            // Save placeholder (non-blocking)
+            if (window.electronAPI) {
+                window.electronAPI.saveAnalyses(saved).catch(err => {
+                    console.error('Error saving placeholder:', err);
+                });
+            }
+            
+            // Refresh saved files view if it's open (non-blocking)
+            if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                setTimeout(() => loadSavedAnalyses(), 0);
+            }
+        } catch (error) {
+            console.error('Error creating placeholder:', error);
+        }
+    }
+    
     try {
         console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries for ${project.fileName}...`);
         
         // Process subtitles in batches
-        const batchResults = await processSubtitleBatches(currentSubtitleData);
+        const batchResults = await processSubtitleBatches(currentSubtitleData, placeholderId);
         
         // Combine all batch results
         const analysisData = {
@@ -1247,6 +1341,84 @@ async function analyzeProject(projectId) {
         // Update project with analysis data
         project.analysisData = analysisData;
         project.status = 'completed';
+        
+        // Autosave: Automatically save the completed analysis
+        try {
+            // Get existing saved analyses
+            let saved = [];
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadAnalyses();
+                if (result.success) {
+                    saved = result.data || [];
+                }
+            }
+            
+            // Update placeholder if it exists, otherwise create new entry
+            if (placeholderId) {
+                const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
+                if (placeholderIndex !== -1) {
+                    // Update placeholder to completed analysis
+                    saved[placeholderIndex] = {
+                        id: placeholderId,
+                        fileName: project.fileName,
+                        date: new Date().toISOString(),
+                        analysis: analysisData,
+                        chatHistory: currentChatHistory,
+                        subtitleData: currentSubtitleData
+                        // Note: status and progress fields are removed (no longer processing)
+                    };
+                } else {
+                    // Placeholder not found, create new entry
+                    const savedAnalysis = {
+                        id: Date.now().toString(),
+                        fileName: project.fileName,
+                        date: new Date().toISOString(),
+                        analysis: analysisData,
+                        chatHistory: currentChatHistory,
+                        subtitleData: currentSubtitleData
+                    };
+                    // Remove any existing analyses with the same fileName (keep only latest)
+                    saved = saved.filter(item => item.fileName !== project.fileName);
+                    saved.push(savedAnalysis);
+                }
+            } else {
+                // No placeholder, create new entry
+                const savedAnalysis = {
+                    id: Date.now().toString(),
+                    fileName: project.fileName,
+                    date: new Date().toISOString(),
+                    analysis: analysisData,
+                    chatHistory: currentChatHistory,
+                    subtitleData: currentSubtitleData
+                };
+                // Remove any existing analyses with the same fileName (keep only latest)
+                saved = saved.filter(item => item.fileName !== project.fileName);
+                saved.push(savedAnalysis);
+            }
+            
+            // Keep only last 50 analyses
+            if (saved.length > 50) {
+                saved.shift();
+            }
+            
+            // Save to file storage
+            if (window.electronAPI) {
+                const saveResult = await window.electronAPI.saveAnalyses(saved);
+                if (saveResult.success) {
+                    console.log('Analysis autosaved successfully');
+                } else {
+                    console.error('Error autosaving analysis:', saveResult.error);
+                }
+            }
+            
+            // Refresh saved files view if it's open
+            if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                await loadSavedAnalyses();
+            }
+        } catch (error) {
+            console.error('Error autosaving analysis:', error);
+            // Don't show alert for autosave errors - it's automatic background saving
+        }
         
         // Set as current analysis
         currentPage = 1;
@@ -1394,6 +1566,56 @@ async function processQueue() {
         isAnalyzing = true;
         analyzeBtn.disabled = true;
         analyzeBtn.textContent = 'Analyzing...';
+        
+        // Create placeholder saved analysis entry with processing status
+        let placeholderId = null;
+        const currentFileName = fileName.textContent || 'unknown';
+        if (currentFileName && currentFileName !== 'unknown') {
+            try {
+                placeholderId = Date.now().toString();
+                const placeholderAnalysis = {
+                    id: placeholderId,
+                    fileName: currentFileName,
+                    date: new Date().toISOString(),
+                    status: 'processing',
+                    analysis: null,
+                    chatHistory: [],
+                    subtitleData: null
+                };
+                
+                // Get existing saved analyses
+                let saved = [];
+                if (window.electronAPI) {
+                    const result = await window.electronAPI.loadAnalyses();
+                    if (result.success) {
+                        saved = result.data || [];
+                    }
+                }
+                
+                // Remove any existing placeholder for this file
+                saved = saved.filter(item => !(item.fileName === currentFileName && item.status === 'processing'));
+                
+                // Add placeholder
+                saved.push(placeholderAnalysis);
+                
+                // Keep only last 50 analyses
+                if (saved.length > 50) {
+                    saved.shift();
+                }
+                
+                // Save placeholder
+                if (window.electronAPI) {
+                    await window.electronAPI.saveAnalyses(saved);
+                }
+                
+                // Refresh saved files view if it's open
+                if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                    await loadSavedAnalyses();
+                }
+            } catch (error) {
+                console.error('Error creating placeholder:', error);
+            }
+        }
 
         try {
             console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries...`);
@@ -1462,6 +1684,45 @@ async function processQueue() {
             analysisData.expressions = Array.from(expressionsMap.values());
             
             console.log(`Analysis complete: ${analysisData.translations.length} translations, ${analysisData.expressions.length} expressions`);
+
+            // Update placeholder with actual analysis data
+            if (placeholderId) {
+                try {
+                    let saved = [];
+                    if (window.electronAPI) {
+                        const result = await window.electronAPI.loadAnalyses();
+                        if (result.success) {
+                            saved = result.data || [];
+                        }
+                    }
+                    
+                    // Find and update placeholder
+                    const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
+                    if (placeholderIndex !== -1) {
+                        saved[placeholderIndex] = {
+                            id: placeholderId,
+                            fileName: currentFileName,
+                            date: new Date().toISOString(),
+                            status: 'completed',
+                            analysis: analysisData,
+                            chatHistory: currentChatHistory,
+                            subtitleData: currentSubtitleData
+                        };
+                        
+                        // Save updated analysis
+                        if (window.electronAPI) {
+                            await window.electronAPI.saveAnalyses(saved);
+                        }
+                        
+                        // Refresh saved files view if it's open
+                        if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                            await loadSavedAnalyses();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error updating placeholder:', error);
+                }
+            }
 
             // Reset pagination to first page for new analysis
             currentPage = 1;
@@ -1539,9 +1800,80 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         }
     });
     
-    // Level filter checkboxes event handlers
-    const levelCheckboxes = document.querySelectorAll('.level-checkbox');
+    // Level filter dropdown functionality
+    const levelFilterBtn = document.getElementById('levelFilterBtn');
+    const levelDropdown = document.getElementById('levelDropdown');
+    const levelAllCheckbox = document.getElementById('levelAllCheckbox');
+    const levelCheckboxes = document.querySelectorAll('.level-dropdown-checkbox');
+    const levelFilterSection = document.querySelector('.level-filter-section');
+    
+    // Toggle dropdown
+    if (levelFilterBtn && levelDropdown) {
+        levelFilterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = levelDropdown.style.display !== 'none';
+            levelDropdown.style.display = isOpen ? 'none' : 'block';
+            levelFilterBtn.classList.toggle('open', !isOpen);
+        });
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (levelFilterSection && !levelFilterSection.contains(e.target)) {
+                levelDropdown.style.display = 'none';
+                levelFilterBtn.classList.remove('open');
+            }
+        });
+    }
+    
+    // Update button text based on selection
+    function updateLevelFilterButtonText() {
+        if (!levelFilterBtn) return;
+        const checkedBoxes = document.querySelectorAll('.level-dropdown-checkbox:checked');
+        const allBoxes = document.querySelectorAll('.level-dropdown-checkbox');
+        const allLevelBoxes = Array.from(allBoxes).filter(cb => cb.value !== 'ALL');
+        const checkedLevelBoxes = Array.from(checkedBoxes).filter(cb => cb.value !== 'ALL');
+        
+        const btnText = levelFilterBtn.querySelector('.level-filter-btn-text');
+        if (checkedLevelBoxes.length === allLevelBoxes.length) {
+            btnText.textContent = 'Filter by CEFR Level: All';
+        } else if (checkedLevelBoxes.length === 0) {
+            btnText.textContent = 'Filter by CEFR Level: None';
+        } else {
+            btnText.textContent = `Filter by CEFR Level: ${checkedLevelBoxes.length} selected`;
+        }
+    }
+    
+    // Handle "ALL" checkbox
+    if (levelAllCheckbox) {
+        levelAllCheckbox.addEventListener('change', (e) => {
+            const allLevelBoxes = Array.from(levelCheckboxes).filter(cb => cb.value !== 'ALL');
+            if (e.target.checked) {
+                // Select all individual level checkboxes
+                allLevelBoxes.forEach(cb => {
+                    cb.checked = true;
+                    const level = cb.value;
+                    if (!selectedLevels.includes(level)) {
+                        selectedLevels.push(level);
+                    }
+                });
+            } else {
+                // Uncheck all individual level checkboxes
+                allLevelBoxes.forEach(cb => {
+                    cb.checked = false;
+                    selectedLevels = selectedLevels.filter(l => !allLevelBoxes.some(c => c.value === l));
+                });
+            }
+            updateLevelFilterButtonText();
+            if (currentAnalysis) {
+                displayExpressions();
+            }
+        });
+    }
+    
+    // Handle individual level checkboxes
     levelCheckboxes.forEach(checkbox => {
+        if (checkbox.value === 'ALL') return; // Skip ALL checkbox, handled separately
+        
         checkbox.addEventListener('change', (e) => {
             const level = e.target.value;
             if (e.target.checked) {
@@ -1552,10 +1884,52 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             } else {
                 // Remove level from selected levels
                 selectedLevels = selectedLevels.filter(l => l !== level);
+                // Uncheck "ALL" if any individual checkbox is unchecked
+                if (levelAllCheckbox) {
+                    levelAllCheckbox.checked = false;
+                }
             }
+            
+            // Check if all individual boxes are checked
+            const allLevelBoxes = Array.from(levelCheckboxes).filter(cb => cb.value !== 'ALL');
+            const allChecked = allLevelBoxes.every(cb => cb.checked);
+            if (levelAllCheckbox) {
+                levelAllCheckbox.checked = allChecked;
+            }
+            
+            updateLevelFilterButtonText();
             // Refresh expressions display with new filter
             if (currentAnalysis) {
                 displayExpressions();
+            }
+        });
+    });
+    
+    // Initialize button text
+    updateLevelFilterButtonText();
+    
+    // Study modal level filter checkboxes
+    const studyLevelCheckboxes = document.querySelectorAll('.study-level-checkbox');
+    studyLevelCheckboxes.forEach(checkbox => {
+        // Set initial state based on selectedStudyLevels
+        checkbox.checked = selectedStudyLevels.includes(checkbox.value);
+        
+        // Add change event listener
+        checkbox.addEventListener('change', (e) => {
+            const level = e.target.value;
+            if (e.target.checked) {
+                // Add level to selected study levels if not already present
+                if (!selectedStudyLevels.includes(level)) {
+                    selectedStudyLevels.push(level);
+                }
+            } else {
+                // Remove level from selected study levels
+                selectedStudyLevels = selectedStudyLevels.filter(l => l !== level);
+            }
+            
+            // Refresh study expressions display with new filter
+            if (studyModal && studyModal.style.display !== 'none') {
+                displayStudyExpressions();
             }
         });
     });
@@ -2051,10 +2425,10 @@ function removeChatMessage(messageId) {
                 }
                 
                 try {
-                    // Get IDs of checked items
-                    const idsToDelete = Array.from(checkedItems).map(cb => cb.dataset.itemId);
+                    // Get IDs of checked items (convert to strings for reliable comparison)
+                    const idsToDelete = Array.from(checkedItems).map(cb => String(cb.dataset.itemId));
                     
-                    // Load saved analyses
+                    // Load ALL saved analyses (not filtered by fileName)
                     let saved = [];
                     if (window.electronAPI) {
                         const result = await window.electronAPI.loadAnalyses();
@@ -2063,8 +2437,12 @@ function removeChatMessage(messageId) {
                         }
                     }
                     
-                    // Filter out deleted items
-                    const filtered = saved.filter(item => !idsToDelete.includes(item.id));
+                    // Filter out deleted items - ensure ID comparison works correctly
+                    // Use strict string comparison to avoid type coercion issues
+                    const filtered = saved.filter(item => {
+                        const itemId = String(item.id);
+                        return !idsToDelete.includes(itemId);
+                    });
                     
                     // Save back to file storage
                     if (window.electronAPI) {
@@ -2619,6 +2997,12 @@ async function openStudyModal(type, item, index, timestamp = null) {
     studyExpressionsContent.innerHTML = '';
     studyExpressionsSection.style.display = 'block'; // Always show the section
     
+    // Sync study level checkboxes with current filter state
+    const studyLevelCheckboxes = document.querySelectorAll('.study-level-checkbox');
+    studyLevelCheckboxes.forEach(checkbox => {
+        checkbox.checked = selectedStudyLevels.includes(checkbox.value);
+    });
+    
     if (type === 'translation') {
         studyTitle.textContent = 'Line-by-Line Study';
         let html = '';
@@ -2992,13 +3376,30 @@ function displayStudyExpressions() {
         expressionsToShow = [];
     }
     
+    // Filter expressions by selected study levels
+    expressionsToShow = expressionsToShow.filter(expr => {
+        // If expression has no level field, show it (backward compatibility)
+        if (!expr.level) {
+            return true;
+        }
+        // Only show expressions matching selected study levels
+        return selectedStudyLevels.includes(expr.level);
+    });
+    
     if (expressionsToShow.length > 0) {
         expressionsToShow.forEach(expr => {
             const exprDiv = document.createElement('div');
             exprDiv.className = 'study-expression-item';
             
-            let exprHtml = `<div class="study-expression-header">`;
+            // Add level tooltip if level exists
+            const levelText = expr.level ? `Level: ${expr.level}` : '';
+            const tooltipAttr = levelText ? `title="${levelText}"` : '';
+            
+            let exprHtml = `<div class="study-expression-header" ${tooltipAttr}>`;
             exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+            if (expr.level) {
+                exprHtml += `<span class="study-expression-level">${escapeHtml(expr.level)}</span>`;
+            }
             exprHtml += `</div>`;
             if (expr.meaning) {
                 exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;

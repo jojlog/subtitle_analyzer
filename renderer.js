@@ -1126,9 +1126,10 @@ function renderFileProjectsList() {
     
     // Attach event listeners
     fileProjectsList.querySelectorAll('.analyze-project-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', async (e) => {
             const projectId = e.target.dataset.projectId;
-            analyzeProject(projectId);
+            // Analyze this specific project, then continue with queue
+            await analyzeProject(projectId);
         });
     });
     
@@ -1303,6 +1304,9 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         analyzeBtn.disabled = false;
         analyzeBtn.textContent = 'Analyze';
         currentProjectId = null;
+        
+        // Automatically process next file in queue
+        processQueue();
     }
 }
 
@@ -1324,7 +1328,23 @@ function removeProject(projectId) {
     renderFileProjectsList();
 }
 
-    // Analyze button - works with current project or first ready project
+// Process files one by one automatically
+async function processQueue() {
+    // Don't start if already analyzing
+    if (isAnalyzing) {
+        return;
+    }
+    
+    // Find first ready project
+    const readyProject = fileProjects.find(p => p.status === 'ready');
+    if (readyProject) {
+        await analyzeProject(readyProject.id);
+        // After analysis completes, check for next file
+        processQueue();
+    }
+}
+
+    // Analyze button - works with current project or starts queue
     analyzeBtn.addEventListener('click', async () => {
         // If currentProjectId is set, use it
         if (currentProjectId) {
@@ -1332,10 +1352,9 @@ function removeProject(projectId) {
             return;
         }
         
-        // Otherwise, find first ready project
-        const readyProject = fileProjects.find(p => p.status === 'ready');
-        if (readyProject) {
-            await analyzeProject(readyProject.id);
+        // Otherwise, start processing queue
+        if (fileProjects.length > 0) {
+            await processQueue();
             return;
         }
         

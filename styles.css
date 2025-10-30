@@ -1,0 +1,717 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: #000000;
+    color: #ffffff;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Header */
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    border-bottom: 1px solid #333;
+    background-color: #0a0a0a;
+}
+
+.header h1 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.header-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.icon-btn {
+    background: transparent;
+    border: none;
+    color: #ffffff;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+}
+
+.icon-btn:hover {
+    background-color: #1a1a1a;
+}
+
+/* Main Content */
+.main-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Upload Section */
+.upload-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 16px;
+}
+
+.upload-area {
+    border: 2px dashed #333;
+    border-radius: 12px;
+    padding: 48px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+    background-color: #0a0a0a;
+    min-width: 400px;
+}
+
+.upload-area:hover {
+    border-color: #555;
+    background-color: #111;
+}
+
+.upload-area svg {
+    color: #666;
+    margin-bottom: 16px;
+}
+
+.upload-area p {
+    color: #999;
+    margin: 8px 0;
+}
+
+.upload-hint {
+    font-size: 14px;
+    color: #666 !important;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background-color: #0a0a0a;
+    border-radius: 8px;
+    min-width: 400px;
+}
+
+.file-info span {
+    flex: 1;
+    color: #ccc;
+}
+
+.analyze-btn, .save-btn {
+    background-color: #ff6600;
+    color: #000;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.2s;
+}
+
+.analyze-btn:hover, .save-btn:hover {
+    background-color: #ff8833;
+}
+
+/* Results Section */
+.results-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.results-header h2 {
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.results-content {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.result-subsection {
+    background-color: #0a0a0a;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #222;
+}
+
+.result-subsection h3 {
+    font-size: 18px;
+    margin-bottom: 16px;
+    color: #ff6600;
+}
+
+#translationsContent, #expressionsContent {
+    color: #ccc;
+    line-height: 1.6;
+}
+
+.translation-item {
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #222;
+}
+
+.translation-item:last-child {
+    border-bottom: none;
+}
+
+.swedish-text {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 8px;
+}
+
+.translation-label {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
+.translation-text {
+    color: #ccc;
+}
+
+.expression-item {
+    margin-bottom: 12px;
+    padding: 12px;
+    background-color: #111;
+    border-radius: 6px;
+    border-left: 3px solid #ff6600;
+}
+
+.expression-word {
+    font-weight: 600;
+    color: #ff6600;
+    margin-right: 8px;
+}
+
+.expression-meaning {
+    color: #ccc;
+}
+
+/* Saved Analyses View */
+.saved-analyses-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.saved-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.close-btn {
+    background-color: #333;
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.close-btn:hover {
+    background-color: #444;
+}
+
+.saved-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.saved-item {
+    background-color: #0a0a0a;
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid #222;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.saved-item:hover {
+    background-color: #111;
+    border-color: #333;
+}
+
+.saved-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.saved-item-name {
+    font-weight: 600;
+    color: #fff;
+}
+
+.saved-item-date {
+    font-size: 12px;
+    color: #666;
+}
+
+.saved-item-preview {
+    font-size: 14px;
+    color: #999;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Settings View */
+.settings-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.settings-content {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setting-item label {
+    font-weight: 600;
+    color: #fff;
+}
+
+.setting-item input {
+    background-color: #0a0a0a;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.setting-item input:focus {
+    outline: none;
+    border-color: #ff6600;
+}
+
+/* Chat Section */
+.chat-section {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid #333;
+    background-color: #0a0a0a;
+    height: 400px;
+    max-height: 50vh;
+}
+
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.chat-message {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chat-message.user {
+    align-items: flex-end;
+}
+
+.chat-message.assistant {
+    align-items: flex-start;
+}
+
+.message-bubble {
+    max-width: 70%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    word-wrap: break-word;
+}
+
+.user .message-bubble {
+    background-color: #ff6600;
+    color: #000;
+}
+
+.assistant .message-bubble {
+    background-color: #1a1a1a;
+    color: #fff;
+    border: 1px solid #333;
+}
+
+.chat-input-container {
+    display: flex;
+    gap: 8px;
+    padding: 16px;
+    border-top: 1px solid #333;
+    background-color: #000;
+}
+
+.chat-input {
+    flex: 1;
+    background-color: #ffffff;
+    border: none;
+    padding: 12px 16px;
+    border-radius: 24px;
+    color: #000;
+    font-size: 14px;
+}
+
+.chat-input::placeholder {
+    color: #666;
+}
+
+.chat-input:focus {
+    outline: none;
+}
+
+.chat-send-btn {
+    background-color: #ff6600;
+    color: #000;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 24px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.2s;
+}
+
+.chat-send-btn:hover {
+    background-color: #ff8833;
+}
+
+.chat-send-btn:disabled {
+    background-color: #333;
+    color: #666;
+    cursor: not-allowed;
+}
+
+/* Loading indicator */
+.loading {
+    text-align: center;
+    color: #666;
+    padding: 24px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #444;
+}
+
+/* Study Modal */
+.study-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.9);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.study-modal-content {
+    width: 90%;
+    max-width: 800px;
+    height: 90%;
+    max-height: 700px;
+    background-color: #000;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #333;
+}
+
+.study-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    border-bottom: 1px solid #333;
+}
+
+.study-header h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.study-item-display {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    border-bottom: 1px solid #333;
+}
+
+.study-item-display .swedish-text {
+    font-size: 20px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 16px;
+}
+
+.study-item-display .translation-label {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+
+.study-item-display .translation-text {
+    font-size: 16px;
+    color: #ccc;
+    line-height: 1.6;
+}
+
+.study-item-display .expression-word {
+    font-size: 20px;
+    font-weight: 600;
+    color: #ff6600;
+    display: block;
+    margin-bottom: 12px;
+}
+
+.study-item-display .expression-meaning {
+    font-size: 16px;
+    color: #ccc;
+    display: block;
+    margin-bottom: 8px;
+}
+
+/* Study Expressions Section */
+.study-expressions-section {
+    padding: 20px 24px;
+    border-bottom: 1px solid #333;
+    background-color: #0a0a0a;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.study-expressions-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ff6600;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.study-expressions-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.study-expression-item {
+    padding: 10px 12px;
+    background-color: #111;
+    border-radius: 6px;
+    border-left: 3px solid #ff6600;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.study-expression-word {
+    font-weight: 600;
+    color: #ff6600;
+    font-size: 14px;
+}
+
+.study-expression-meaning {
+    color: #ccc;
+    font-size: 13px;
+}
+
+.study-expression-example {
+    font-size: 12px;
+    color: #999;
+    font-style: italic;
+    margin-top: 4px;
+}
+
+.study-chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 300px;
+    max-height: 40vh;
+    background-color: #0a0a0a;
+}
+
+.study-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.study-chat-message {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.study-chat-message.user {
+    align-items: flex-end;
+}
+
+.study-chat-message.assistant {
+    align-items: flex-start;
+}
+
+.study-message-bubble {
+    max-width: 70%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    word-wrap: break-word;
+}
+
+.study-chat-message.user .study-message-bubble {
+    background-color: #ff6600;
+    color: #000;
+}
+
+.study-chat-message.assistant .study-message-bubble {
+    background-color: #1a1a1a;
+    color: #fff;
+    border: 1px solid #333;
+}
+
+.study-chat-input-container {
+    display: flex;
+    gap: 8px;
+    padding: 16px;
+    border-top: 1px solid #333;
+    background-color: #000;
+}
+
+.study-chat-input {
+    flex: 1;
+    background-color: #ffffff;
+    border: none;
+    padding: 12px 16px;
+    border-radius: 24px;
+    color: #000;
+    font-size: 14px;
+}
+
+.study-chat-input::placeholder {
+    color: #666;
+}
+
+.study-chat-input:focus {
+    outline: none;
+}
+
+.study-chat-send-btn {
+    background-color: #ff6600;
+    color: #000;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 24px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.2s;
+}
+
+.study-chat-send-btn:hover {
+    background-color: #ff8833;
+}
+
+.study-chat-send-btn:disabled {
+    background-color: #333;
+    color: #666;
+    cursor: not-allowed;
+}
+
+/* Make items clickable */
+.translation-item {
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.translation-item:hover {
+    background-color: #111;
+}
+
+.expression-item {
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.expression-item:hover {
+    background-color: #111;
+}
+

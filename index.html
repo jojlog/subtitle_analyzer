@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swedish Subtitle Analyzer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>Swedish Subtitle Analyzer</h1>
+            <div class="header-actions">
+                <button id="homeBtn" class="icon-btn" title="Go Back to Home">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                    </svg>
+                </button>
+                <button id="savedAnalysesBtn" class="icon-btn" title="Saved Analyses">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                        <polyline points="7 3 7 8 15 8"></polyline>
+                    </svg>
+                </button>
+                <button id="settingsBtn" class="icon-btn" title="Settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3m15.364 6.364l-4.243-4.243m-4.242 0L5.636 17.364m12.728 0l-4.243-4.243m-4.242 0L5.636 6.636"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Upload Section -->
+            <div id="uploadSection" class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <p>Drag and drop a .vtt file here</p>
+                    <p class="upload-hint">or click to browse</p>
+                    <input type="file" id="fileInput" accept=".vtt" hidden>
+                </div>
+                <div id="fileInfo" class="file-info" style="display: none;">
+                    <span id="fileName"></span>
+                    <button id="analyzeBtn" class="analyze-btn">Analyze</button>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsSection" class="results-section" style="display: none;">
+                <div class="results-header">
+                    <h2>Analysis Results</h2>
+                    <button id="saveAnalysisBtn" class="save-btn">Save Analysis</button>
+                </div>
+                
+                <div class="results-content">
+                    <div id="translationsSection" class="result-subsection">
+                        <h3>Translations</h3>
+                        <div id="translationsContent"></div>
+                    </div>
+                    
+                    <div id="expressionsSection" class="result-subsection">
+                        <h3>Important Expressions & Words</h3>
+                        <div id="expressionsContent"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Saved Analyses View -->
+            <div id="savedAnalysesView" class="saved-analyses-view" style="display: none;">
+                <div class="saved-header">
+                    <h2>Saved Analyses</h2>
+                    <button id="closeSavedBtn" class="close-btn">Close</button>
+                </div>
+                <div id="savedAnalysesList" class="saved-list"></div>
+            </div>
+
+            <!-- Settings View -->
+            <div id="settingsView" class="settings-view" style="display: none;">
+                <div class="settings-header">
+                    <h2>Settings</h2>
+                    <button id="closeSettingsBtn" class="close-btn">Close</button>
+                </div>
+                <div class="settings-content">
+                    <div class="setting-item">
+                        <label for="apiKeyInput">OpenAI API Key</label>
+                        <input type="password" id="apiKeyInput" placeholder="sk-...">
+                        <button id="saveApiKeyBtn" class="save-btn">Save API Key</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Section -->
+            <div id="chatSection" class="chat-section" style="display: none;">
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="chatInput" placeholder="ask gpt" class="chat-input">
+                    <button id="chatSendBtn" class="chat-send-btn">send</button>
+                </div>
+            </div>
+
+            <!-- Study Modal -->
+            <div id="studyModal" class="study-modal" style="display: none;">
+                <div class="study-modal-content">
+                    <div class="study-header">
+                        <h3 id="studyTitle">Study Mode</h3>
+                        <button id="closeStudyBtn" class="close-btn">Close</button>
+                    </div>
+                    <div class="study-item-display">
+                        <div id="studyItemContent"></div>
+                    </div>
+                    <div id="studyExpressionsSection" class="study-expressions-section" style="display: none;">
+                        <h4 class="study-expressions-title">Important Expressions & Words</h4>
+                        <div id="studyExpressionsContent" class="study-expressions-content"></div>
+                    </div>
+                    <div class="study-chat-container">
+                        <div id="studyChatMessages" class="study-chat-messages"></div>
+                        <div class="study-chat-input-container">
+                            <input type="text" id="studyChatInput" placeholder="ask gpt" class="study-chat-input">
+                            <button id="studyChatSendBtn" class="study-chat-send-btn">send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
+

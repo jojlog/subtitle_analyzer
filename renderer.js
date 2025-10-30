@@ -515,10 +515,14 @@ ${subtitleText}`;
             
             // Only auto-switch to results if user is not in another view
             if (!isInSettings && !isInSavedAnalyses && !isInStudyModal) {
-                // Show results and chat
+                // Show results only (no chat or expressions in main view)
                 uploadSection.style.display = 'none';
                 resultsSection.style.display = 'flex';
-                chatSection.style.display = 'flex';
+                chatSection.style.display = 'none';
+                // Hide expressions section
+                if (expressionsContent && expressionsContent.parentElement) {
+                    expressionsContent.parentElement.style.display = 'none';
+                }
             }
             // If user is in settings/saved analyses, analysis data is already stored
             // and will be shown when they return (handled by closeSettingsBtn)
@@ -645,11 +649,10 @@ function displayAnalysis(data) {
         translationsContent.innerHTML = '<p style="color: #666;">No translations found.</p>';
     }
 
-    // Display expressions using helper function
-    if (data.expressions && data.expressions.length > 0) {
-        displayExpressions();
-    } else {
-        expressionsContent.innerHTML = '<p style="color: #666;">No expressions found.</p>';
+    // Expressions are only shown in study modal, not in main results view
+    // Hide expressions section in main view
+    if (expressionsContent && expressionsContent.parentElement) {
+        expressionsContent.parentElement.style.display = 'none';
     }
 }
 
@@ -1042,8 +1045,10 @@ function addChatMessage(role, content, wordToSave = null) {
     
     bubbleContainer.appendChild(bubble);
     
-    // Add save button for all assistant messages - outside the bubble
-    if (role === 'assistant') {
+    // "add on the list +" button is only in study modal, not in main chat
+    // Check if this is the study modal chat by checking chatMessages id
+    const isStudyChat = chatMessages && chatMessages.id === 'studyChatMessages';
+    if (role === 'assistant' && isStudyChat) {
         const saveBtn = document.createElement('button');
         saveBtn.className = 'add-to-list-btn';
         saveBtn.textContent = 'add on the list +';
@@ -1096,13 +1101,8 @@ function addChatMessage(role, content, wordToSave = null) {
             saveBtn.disabled = true;
             saveBtn.textContent = 'saving...';
             
-            // Determine context - check if we're in study modal
-            const isInStudyModal = studyModal && studyModal.style.display !== 'none';
-            if (isInStudyModal) {
-                await addExpressionFromStudyChat(word);
-            } else {
-                await addExpressionFromChat(word, 'main');
-            }
+            // This button is only in study modal, so always use study chat function
+            await addExpressionFromStudyChat(word);
             
             saveBtn.disabled = false;
             saveBtn.textContent = 'added ✓';
@@ -1419,19 +1419,18 @@ async function reopenAnalysis(savedItem) {
     
     displayAnalysis(currentAnalysis);
     
-    // Restore chat messages
-    chatMessages.innerHTML = '';
-    currentChatHistory.forEach(msg => {
-        if (msg.role !== 'system' && msg.content) {
-            addChatMessage(msg.role === 'user' ? 'user' : 'assistant', msg.content);
-        }
-    });
+    // Chat messages are only restored in study modal, not in main view
+    // Chat history is preserved but not displayed in main view
     
-    // Show views
+    // Show views (no chat or expressions in main view)
     savedAnalysesView.style.display = 'none';
     uploadSection.style.display = 'none';
     resultsSection.style.display = 'flex';
-    chatSection.style.display = 'flex';
+    chatSection.style.display = 'none'; // Hide chat in main view
+    // Hide expressions section
+    if (expressionsContent && expressionsContent.parentElement) {
+        expressionsContent.parentElement.style.display = 'none';
+    }
     
     // Exit edit mode when reopening
     isEditMode = false;
@@ -1478,7 +1477,11 @@ async function reopenAnalysis(savedItem) {
             // If analysis completed while in settings, ensure it's displayed
             displayAnalysis(currentAnalysis);
             resultsSection.style.display = 'flex';
-            chatSection.style.display = 'flex';
+            chatSection.style.display = 'none'; // No chat in main view
+            // Hide expressions section
+            if (expressionsContent && expressionsContent.parentElement) {
+                expressionsContent.parentElement.style.display = 'none';
+            }
         } else {
             uploadSection.style.display = 'flex';
         }

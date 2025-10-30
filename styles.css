@@ -503,43 +503,62 @@ body.theme-purple {
 
 .saved-item-content {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-.saved-item-header {
+.saved-item-top-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
+    gap: 16px;
 }
 
-.saved-item-rename-section {
+.saved-item-bottom-row {
     display: flex;
+    justify-content: flex-end;
     align-items: center;
-    gap: 8px;
-    margin-top: 8px;
 }
 
 .saved-item-rename-btn {
-    background-color: transparent;
+    background-color: var(--bg-tertiary);
     border: none;
     color: var(--text-secondary);
-    padding: 0;
-    border-radius: 0;
+    padding: 4px 8px;
+    border-radius: 4px;
     cursor: pointer;
     font-size: 14px;
-    transition: color 0.2s;
+    transition: color 0.2s, background-color 0.2s;
     position: relative;
     z-index: 10;
-    text-align: left;
+    text-align: right;
     font-weight: normal;
 }
 
 .saved-item-rename-btn:hover {
     color: var(--text-primary);
+    background-color: var(--bg-quaternary);
+}
+
+.saved-item-save-btn {
+    background-color: var(--accent-color);
+    border: none;
+    color: #fff;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.saved-item-save-btn:hover {
+    background-color: var(--accent-hover);
 }
 
 .saved-item-rename-input {
-    flex: 1;
     background-color: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
@@ -547,8 +566,9 @@ body.theme-purple {
     border-radius: 4px;
     font-size: 14px;
     font-family: inherit;
-    width: 100%;
+    flex: 1;
     cursor: text;
+    min-width: 0;
 }
 
 .saved-item-rename-input::placeholder {
@@ -564,11 +584,13 @@ body.theme-purple {
 .saved-item-name {
     font-weight: 600;
     color: #fff;
+    flex: 1;
 }
 
 .saved-item-date {
     font-size: 12px;
     color: #666;
+    text-align: right;
 }
 
 .saved-item-preview {

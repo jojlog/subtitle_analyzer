@@ -1370,13 +1370,14 @@ async function loadSavedAnalyses() {
             <div class="saved-item-content-wrapper">
                 ${checkboxHtml}
                 <div class="saved-item-content">
-                    <div class="saved-item-header">
+                    <div class="saved-item-top-row">
                         <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
-                        <span class="saved-item-date">${dateStr}</span>
-                    </div>
-                    <div class="saved-item-rename-section">
                         <button class="saved-item-rename-btn" data-item-id="${escapeHtml(item.id)}">rename</button>
                         <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
+                        <button class="saved-item-save-btn" data-item-id="${escapeHtml(item.id)}" style="display: none;">save</button>
+                    </div>
+                    <div class="saved-item-bottom-row">
+                        <span class="saved-item-date">${dateStr}</span>
                     </div>
                 </div>
             </div>
@@ -1386,93 +1387,123 @@ async function loadSavedAnalyses() {
         const renameBtn = savedItem.querySelector('.saved-item-rename-btn');
         const renameInput = savedItem.querySelector('.saved-item-rename-input');
         const nameSpan = savedItem.querySelector('.saved-item-name');
+        const saveBtn = savedItem.querySelector('.saved-item-save-btn');
+        
+        // Function to save the rename
+        const saveRename = async () => {
+            const newName = renameInput.value.trim();
+            if (!newName) {
+                // Restore original if empty
+                renameInput.value = item.fileName;
+                return;
+            }
+            
+            if (newName !== item.fileName) {
+                // Update the item
+                item.fileName = newName;
+                
+                // Save updated analyses
+                try {
+                    let saved = [];
+                    if (window.electronAPI) {
+                        const result = await window.electronAPI.loadAnalyses();
+                        if (result.success) {
+                            saved = result.data || [];
+                        }
+                    }
+                    
+                    // Find and update the item
+                    const index = saved.findIndex(s => s.id === item.id);
+                    if (index !== -1) {
+                        saved[index].fileName = newName;
+                        
+                        if (window.electronAPI) {
+                            await window.electronAPI.saveAnalyses(saved);
+                            // Update the displayed name
+                            nameSpan.textContent = newName;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error renaming:', error);
+                    alert('Error renaming file: ' + error.message);
+                    // Restore original value on error
+                    renameInput.value = item.fileName;
+                    return;
+                }
+            }
+            
+            // Exit rename mode
+            renameBtn.style.display = '';
+            nameSpan.style.display = '';
+            renameInput.style.display = 'none';
+            if (saveBtn) saveBtn.style.display = 'none';
+        };
+        
+        // Function to exit rename mode without saving
+        const cancelRename = () => {
+            renameInput.value = item.fileName;
+            renameBtn.style.display = '';
+            nameSpan.style.display = '';
+            renameInput.style.display = 'none';
+            if (saveBtn) saveBtn.style.display = 'none';
+        };
         
         if (renameBtn && renameInput && nameSpan) {
             // Click rename button to show input field
             renameBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                // Hide button and name, show input
+                // Hide button and name, show input in place of name
                 renameBtn.style.display = 'none';
                 nameSpan.style.display = 'none';
+                // Move input to replace the name in the top row
+                const topRow = savedItem.querySelector('.saved-item-top-row');
+                topRow.insertBefore(renameInput, renameBtn);
                 renameInput.style.display = 'block';
+                if (saveBtn) saveBtn.style.display = 'block';
                 renameInput.focus();
                 renameInput.select();
             });
             
-            // Save rename on blur (when user clicks away)
-            renameInput.addEventListener('blur', async () => {
-                const newName = renameInput.value.trim();
-                if (newName && newName !== item.fileName) {
-                    // Update the item
-                    item.fileName = newName;
-                    
-                    // Save updated analyses
-                    try {
-                        let saved = [];
-                        if (window.electronAPI) {
-                            const result = await window.electronAPI.loadAnalyses();
-                            if (result.success) {
-                                saved = result.data || [];
-                            }
-                        }
-                        
-                        // Find and update the item
-                        const index = saved.findIndex(s => s.id === item.id);
-                        if (index !== -1) {
-                            saved[index].fileName = newName;
-                            
-                            if (window.electronAPI) {
-                                await window.electronAPI.saveAnalyses(saved);
-                                // Update the displayed name
-                                nameSpan.textContent = newName;
-                            }
-                        }
-                    } catch (error) {
-                        console.error('Error renaming:', error);
-                        alert('Error renaming file: ' + error.message);
-                        // Restore original value on error
-                        renameInput.value = item.fileName;
-                    }
-                } else if (!newName) {
-                    // Restore original if empty
-                    renameInput.value = item.fileName;
-                }
-                
-                // Show button and name again, hide input
-                renameBtn.style.display = '';
-                nameSpan.style.display = '';
-                renameInput.style.display = 'none';
-            });
+            // Save button click handler
+            if (saveBtn) {
+                saveBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await saveRename();
+                });
+            }
             
-            // Save rename on Enter key
+            // Enter key saves, Escape cancels rename
             renameInput.addEventListener('keydown', async (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    renameInput.blur(); // Trigger blur event which will save
+                    await saveRename();
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
-                    renameInput.value = item.fileName;
-                    renameBtn.style.display = '';
-                    nameSpan.style.display = '';
-                    renameInput.style.display = 'none';
+                    cancelRename();
                 }
             });
             
-            // Prevent item click when clicking on rename button or input
+            // Prevent item click when clicking on rename button, input, or save button
             renameBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
             });
             renameInput.addEventListener('click', (e) => {
                 e.stopPropagation();
             });
+            if (saveBtn) {
+                saveBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                });
+            }
         }
         
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Don't trigger if clicking rename button or input
+                // Don't trigger if clicking rename button, input, or save button
                 if (e.target.classList.contains('saved-item-rename-btn') || 
-                    e.target.classList.contains('saved-item-rename-input')) {
+                    e.target.classList.contains('saved-item-rename-input') ||
+                    e.target.classList.contains('saved-item-save-btn')) {
                     return;
                 }
                 await reopenAnalysis(item);
@@ -1489,7 +1520,8 @@ async function loadSavedAnalyses() {
             savedItem.addEventListener('click', (e) => {
                 if (e.target.type !== 'checkbox' && 
                     !e.target.classList.contains('saved-item-rename-btn') &&
-                    !e.target.classList.contains('saved-item-rename-input')) {
+                    !e.target.classList.contains('saved-item-rename-input') &&
+                    !e.target.classList.contains('saved-item-save-btn')) {
                     const checkbox = savedItem.querySelector('.saved-item-checkbox');
                     if (checkbox) {
                         checkbox.checked = !checkbox.checked;

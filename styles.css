@@ -239,6 +239,106 @@ body.theme-purple {
     color: #ccc;
 }
 
+/* File Projects List */
+.file-projects-list {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+    min-width: 400px;
+}
+
+.file-project-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background-color: #0a0a0a;
+    border-radius: 8px;
+    border: 1px solid #333;
+    gap: 16px;
+}
+
+.file-project-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.file-project-name {
+    color: #ccc;
+    font-weight: 500;
+}
+
+.file-project-status {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.file-project-status.status-ready {
+    color: #999;
+}
+
+.file-project-status.status-analyzing {
+    color: #ff6600;
+}
+
+.file-project-status.status-completed {
+    color: #4caf50;
+}
+
+.file-project-status.status-error {
+    color: #f44336;
+}
+
+.file-project-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.analyze-project-btn,
+.remove-project-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.analyze-project-btn {
+    background-color: #ff6600;
+    color: #000;
+}
+
+.analyze-project-btn:hover:not(:disabled) {
+    background-color: #ff8833;
+}
+
+.analyze-project-btn:disabled {
+    background-color: #333;
+    color: #666;
+    cursor: not-allowed;
+}
+
+.remove-project-btn {
+    background-color: #333;
+    color: #ccc;
+}
+
+.remove-project-btn:hover:not(:disabled) {
+    background-color: #444;
+    color: #fff;
+}
+
+.remove-project-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .analyze-btn, .save-btn {
     background-color: #ff6600;
     color: #000;
@@ -292,15 +392,29 @@ body.theme-purple {
     align-items: center;
 }
 
-.results-header-buttons {
+.results-header-title-section {
     display: flex;
-    gap: 12px;
-    align-items: center;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .results-header h2 {
     font-size: 24px;
     font-weight: 600;
+    margin: 0;
+}
+
+.results-header-hint {
+    font-size: 14px;
+    color: var(--text-tertiary);
+    margin: 0;
+    font-weight: normal;
+}
+
+.results-header-buttons {
+    display: flex;
+    gap: 12px;
+    align-items: center;
 }
 
 .results-content {
@@ -1073,6 +1187,12 @@ body.theme-purple .add-to-list-btn:hover {
     flex-direction: column;
 }
 
+.study-message-bubble-container.has-button {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+}
+
 .study-message-bubble {
     padding: 12px 16px;
     border-radius: 12px;
@@ -1091,8 +1211,8 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-chat-message .add-to-list-btn {
-    align-self: flex-end;
-    margin-top: 6px;
+    flex-shrink: 0;
+    margin-top: 0;
     padding: 4px 8px;
     font-size: 11px;
     background-color: transparent;
@@ -1102,6 +1222,7 @@ body.theme-purple .add-to-list-btn:hover {
     transition: color 0.2s;
     font-weight: 500;
     text-align: right;
+    align-self: flex-end;
 }
 
 .study-chat-message .add-to-list-btn:hover {

@@ -1,40 +1,41 @@
-<!-- 6ed2a57a-6d97-4014-8da0-90c8fd307d6b e31c6fb5-6783-4f18-9f72-fe03e2972b9a -->
-# Reposition Add Button and Update Followup Message
+<!-- 6ed2a57a-6d97-4014-8da0-90c8fd307d6b 018826a8-535e-4b20-aea3-6c96b0b02fa1 -->
+# Fix Warning Location and Preserve Analysis Progress
+
+## Issues Identified
+
+1. **Warning appears on wrong button**: Currently shows on home button (line 588-595), should show on saved analyses button (line 1652)
+2. **Progress not preserved**: `currentAnalysis` is only set at the END of all batch processing (line 1129), so partial progress is lost if user navigates away
 
 ## Changes Required
 
-### 1. Move "Add" button to right side of message bubble
+### 1. Move warning from home button to saved analyses button
 
-- **File**: `renderer.js` (lines 3159-3225)
-- Modify `bubbleContainer` structure to display button alongside bubble horizontally
-- Change button positioning logic - instead of appending to `bubbleContainer` with column layout, wrap bubble and button in a flex row container
-- Update to place button on the right side of the bubble
+- **File**: `renderer.js`
+- **Remove** warning check from `homeBtn` click handler (lines 589-595)
+- **Add** warning check to `savedAnalysesBtn` click handler (before line 1655)
+- Use same confirmation dialog text: "Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background."
+- If user cancels, don't open saved analyses view
 
-- **File**: `styles.css` (lines 1069-1114)
-- Update `.study-message-bubble-container` to use `flex-direction: row` for horizontal layout
-- Adjust `.study-chat-message .add-to-list-btn` positioning to align right next to bubble
-- Ensure proper spacing and alignment
+### 2. Preserve analysis progress incrementally
 
-### 2. Update followup message format
+- **File**: `renderer.js`
+- **Initialize `currentAnalysis`** at start of analysis (after line 1056, before batch processing)
+  - Set to empty structure: `{ translations: [], expressions: [] }`
+- **Update `currentAnalysis` incrementally** after each batch completes (in `processSubtitleBatches` function, after each batch result is processed, around line 944-980)
+  - Merge completed batch results into `currentAnalysis.translations` and `currentAnalysis.expressions`
+  - Call `displayAnalysis(currentAnalysis)` after each batch to show progress
+- **Ensure progress is visible** when user navigates back during analysis
+  - Results section should show partial results if `currentAnalysis` exists and `isAnalyzing` is true
 
-- **File**: `renderer.js` (line 2821)
-- Change from: `Do you want to add "${detectedSwedishWord}" to the list?`
-- Change to: `Do you want to add "${detectedSwedishWord}" to the list, Important Expressions & Words?`
+### 3. Display progress during analysis
 
-### 3. Change confirmation to popup window
-
-- **File**: `renderer.js` (line 3140)
-- Replace `addStudyChatMessage('assistant', ...)` confirmation message
-- Change to `alert()` popup showing: `Added "${dictionaryForm}"` (just the added message, without the meaning)
+- **File**: `renderer.js`
+- After each batch completes, update display with current progress
+- Ensure `displayAnalysis()` can handle partial/incomplete analysis data gracefully
 
 ## Implementation Details
 
-- Button functionality remains unchanged - only positioning and message format updates
-- CSS will need flex row layout for horizontal button placement
-- Confirmation popup will use native browser alert dialog
-
-### To-dos
-
-- [ ] Update CSS to position Add button on right side of message bubble (change flex-direction to row, adjust button styles)
-- [ ] Update followup message text to include 'Important Expressions & Words'
-- [ ] Change confirmation message from chat message to alert popup showing 'Added [word]'
+- Warning: Simple move of confirmation check from one event handler to another
+- Progress: Initialize `currentAnalysis` early, update it after each batch in the loop (line 792-980 area), call `displayAnalysis()` incrementally
+- No changes to other functions, designs, or layouts
+- Keep all existing functionality intact

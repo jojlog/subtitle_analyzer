@@ -5,12 +5,17 @@ let currentSubtitleData = null;
 let apiKey = null;
 let isAnalyzing = false;
 
+// Multiple files support
+let fileProjects = []; // Array of { id, fileName, subtitleData, analysisData, status }
+let currentProjectId = null; // ID of currently selected/analyzing project
+
 // Pagination state
 let currentPage = 1;
 let itemsPerPage = 50;
 
 // DOM elements (will be initialized when DOM is ready)
 let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, resultsSection, uploadSection;
+let fileProjectsList; // Container for multiple file projects list
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
@@ -533,6 +538,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInfo = document.getElementById('fileInfo');
     fileName = document.getElementById('fileName');
     analyzeBtn = document.getElementById('analyzeBtn');
+    fileProjectsList = document.getElementById('fileProjectsList');
     resultsSection = document.getElementById('resultsSection');
     uploadSection = document.getElementById('uploadSection');
     translationsContent = document.getElementById('translationsContent');
@@ -586,30 +592,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
-        // Don't allow going home if analysis is in progress
-        if (isAnalyzing) {
-            const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
-            if (!confirmLeave) {
-                return;
-            }
-        }
-        
         // Close any open modals/views
         studyModal.style.display = 'none';
         savedAnalysesView.style.display = 'none';
         settingsView.style.display = 'none';
         
-        // Reset to home/upload view
+        // If analysis is in progress, preserve data and show progress
+        if (isAnalyzing) {
+            // Show upload section with file info to display progress
+            uploadSection.style.display = 'flex';
+            if (fileInfo) {
+                fileInfo.style.display = 'flex';
+            }
+            resultsSection.style.display = 'none';
+            chatSection.style.display = 'none';
+            // Don't reset data - analysis needs it to continue
+            return;
+        }
+        
+        // Reset to home/upload view (only when not analyzing)
         uploadSection.style.display = 'flex';
         resultsSection.style.display = 'none';
         chatSection.style.display = 'none';
         
-        // Reset file info
+        // Reset file info and current project (but keep projects list)
         fileInfo.style.display = 'none';
         scriptName.textContent = '';
         currentAnalysis = null;
         currentChatHistory = [];
         currentSubtitleData = null;
+        currentProjectId = null;
+        
+        // Re-render projects list
+        renderFileProjectsList();
     });
 
     // File upload handling
@@ -631,24 +646,38 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         uploadArea.style.borderColor = '#333';
 
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            const fileName = files[0].name.toLowerCase();
-            if (fileName.endsWith('.vtt') || fileName.endsWith('.txt')) {
-                await handleFileSelect(files[0]);
+        const files = Array.from(e.dataTransfer.files);
+        const validFiles = files.filter(file => {
+            const fileName = file.name.toLowerCase();
+            return fileName.endsWith('.vtt') || fileName.endsWith('.txt');
+        });
+        
+        if (validFiles.length > 0) {
+            for (const file of validFiles) {
+                await handleFileSelect(file);
             }
+        } else if (files.length > 0) {
+            alert('Please drop .vtt or .txt files only.');
         }
     });
 
     fileInput.addEventListener('change', async (e) => {
         if (e.target.files && e.target.files.length > 0) {
-            const file = e.target.files[0];
-            const fileName = file.name.toLowerCase();
-            if (fileName.endsWith('.vtt') || fileName.endsWith('.txt')) {
-                await handleFileSelect(file);
+            const files = Array.from(e.target.files);
+            const validFiles = files.filter(file => {
+                const fileName = file.name.toLowerCase();
+                return fileName.endsWith('.vtt') || fileName.endsWith('.txt');
+            });
+            
+            if (validFiles.length > 0) {
+                for (const file of validFiles) {
+                    await handleFileSelect(file);
+                }
             } else {
-                alert('Please select a .vtt or .txt file.');
+                alert('Please select .vtt or .txt files only.');
             }
+            // Reset input to allow selecting same files again
+            e.target.value = '';
         }
     });
 
@@ -682,29 +711,46 @@ async function handleFileSelect(file) {
         
         // Detect file type and use appropriate parser (case-insensitive)
         const fileNameLower = file.name.toLowerCase();
+        let subtitleData = null;
+        
         if (fileNameLower.endsWith('.vtt')) {
-            currentSubtitleData = parseVTT(fixedContent);
-            console.log('Parsed VTT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
+            subtitleData = parseVTT(fixedContent);
+            console.log('Parsed VTT file, subtitle count:', subtitleData ? subtitleData.length : 0);
         } else if (fileNameLower.endsWith('.txt')) {
-            currentSubtitleData = parseTXT(fixedContent);
-            console.log('Parsed TXT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
+            subtitleData = parseTXT(fixedContent);
+            console.log('Parsed TXT file, subtitle count:', subtitleData ? subtitleData.length : 0);
         } else {
             alert('Unsupported file type. Please upload a .vtt or .txt file.');
-            currentSubtitleData = null;
             return;
         }
         
         // Ensure we have valid data
-        if (!currentSubtitleData || currentSubtitleData.length === 0) {
-            alert('The file appears to be empty or could not be parsed. Please check the file contains text and try again.');
-            currentSubtitleData = null;
-            fileInfo.style.display = 'none';
+        if (!subtitleData || subtitleData.length === 0) {
+            alert(`The file "${file.name}" appears to be empty or could not be parsed. Please check the file contains text and try again.`);
             return;
         }
         
-        fileName.textContent = file.name;
-        scriptName.textContent = file.name;
-        fileInfo.style.display = 'flex';
+        // Check if file already exists
+        const existingProject = fileProjects.find(p => p.fileName === file.name);
+        if (existingProject) {
+            // Update existing project
+            existingProject.subtitleData = subtitleData;
+            existingProject.status = 'ready';
+            existingProject.analysisData = null;
+        } else {
+            // Add new project
+            const projectId = 'project-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            fileProjects.push({
+                id: projectId,
+                fileName: file.name,
+                subtitleData: subtitleData,
+                analysisData: null,
+                status: 'ready' // ready, analyzing, completed, error
+            });
+        }
+        
+        // Render the file projects list
+        renderFileProjectsList();
         
         // Reset state
         currentAnalysis = null;
@@ -809,6 +855,15 @@ async function processSubtitleBatches(subtitleData) {
         
         // Update button text to show progress and time estimate
         analyzeBtn.textContent = `Analyzing... (Batch ${batchNumber}/${batches.length}${timeRemainingText})`;
+        
+        // Update project status in list if we have a current project
+        if (currentProjectId) {
+            const project = fileProjects.find(p => p.id === currentProjectId);
+            if (project) {
+                project.status = 'analyzing';
+                renderFileProjectsList();
+            }
+        }
         
         try {
             // Format batch text with numbered entries (using global index)
@@ -1033,8 +1088,258 @@ ${missingText}`;
     return results;
 }
 
-    // Analyze button
+// Render file projects list
+function renderFileProjectsList() {
+    if (!fileProjectsList) return;
+    
+    if (fileProjects.length === 0) {
+        fileProjectsList.innerHTML = '';
+        fileProjectsList.style.display = 'none';
+        return;
+    }
+    
+    fileProjectsList.style.display = 'flex';
+    fileProjectsList.innerHTML = fileProjects.map(project => {
+        const statusText = project.status === 'ready' ? 'Ready' : 
+                          project.status === 'analyzing' ? 'Analyzing...' :
+                          project.status === 'completed' ? 'Completed' :
+                          project.status === 'error' ? 'Error' : 'Ready';
+        const statusClass = project.status === 'analyzing' ? 'status-analyzing' :
+                           project.status === 'completed' ? 'status-completed' :
+                           project.status === 'error' ? 'status-error' : 'status-ready';
+        
+        return `
+            <div class="file-project-item" data-project-id="${project.id}">
+                <div class="file-project-info">
+                    <span class="file-project-name">${escapeHtml(project.fileName)}</span>
+                    <span class="file-project-status ${statusClass}">${statusText}</span>
+                </div>
+                <div class="file-project-actions">
+                    <button class="analyze-project-btn" data-project-id="${project.id}" ${project.status === 'analyzing' || isAnalyzing ? 'disabled' : ''}>
+                        ${project.status === 'analyzing' ? 'Analyzing...' : project.status === 'completed' ? 'Re-analyze' : 'Analyze'}
+                    </button>
+                    <button class="remove-project-btn" data-project-id="${project.id}" ${project.status === 'analyzing' ? 'disabled' : ''}>Remove</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Attach event listeners
+    fileProjectsList.querySelectorAll('.analyze-project-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const projectId = e.target.dataset.projectId;
+            analyzeProject(projectId);
+        });
+    });
+    
+    fileProjectsList.querySelectorAll('.remove-project-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const projectId = e.target.dataset.projectId;
+            removeProject(projectId);
+        });
+    });
+}
+
+// Analyze a specific project
+async function analyzeProject(projectId) {
+    const project = fileProjects.find(p => p.id === projectId);
+    if (!project) return;
+    
+    if (!apiKey) {
+        alert('Please set your OpenAI API key in Settings first.');
+        settingsBtn.click();
+        return;
+    }
+    
+    if (isAnalyzing) {
+        alert('Analysis is already in progress. Please wait for it to complete.');
+        return;
+    }
+    
+    // Set current project
+    currentProjectId = projectId;
+    currentSubtitleData = project.subtitleData;
+    fileName.textContent = project.fileName;
+    scriptName.textContent = project.fileName;
+    fileInfo.style.display = 'flex';
+    
+    project.status = 'analyzing';
+    renderFileProjectsList();
+    
+    isAnalyzing = true;
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = 'Analyzing...';
+    
+    try {
+        console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries for ${project.fileName}...`);
+        
+        // Process subtitles in batches
+        const batchResults = await processSubtitleBatches(currentSubtitleData);
+        
+        // Combine all batch results
+        const analysisData = {
+            translations: [],
+            expressions: []
+        };
+        
+        // Merge translations from all batches
+        const allTranslationsBeforeDedup = [];
+        batchResults.forEach(batch => {
+            if (batch.translations) {
+                const fixedTranslations = batch.translations.map(t => fixTranslationEncoding(t));
+                allTranslationsBeforeDedup.push(...fixedTranslations);
+            }
+            if (batch.expressions) {
+                const fixedExpressions = batch.expressions.map(e => fixTranslationEncoding(e));
+                analysisData.expressions.push(...fixedExpressions);
+            }
+        });
+        
+        // Deduplicate translations
+        const translationsMap = new Map();
+        allTranslationsBeforeDedup.forEach(trans => {
+            if (trans.swedish) {
+                const fixedSwedish = fixEncoding(trans.swedish.trim());
+                const normalizedKey = normalizeTextForMatching(fixedSwedish);
+                if (!translationsMap.has(normalizedKey)) {
+                    translationsMap.set(normalizedKey, trans);
+                } else {
+                    const existing = translationsMap.get(normalizedKey);
+                    if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
+                        if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
+                            translationsMap.set(normalizedKey, trans);
+                        }
+                    }
+                }
+            }
+        });
+        analysisData.translations = Array.from(translationsMap.values());
+        
+        // Deduplicate expressions
+        const expressionsMap = new Map();
+        analysisData.expressions.forEach(expr => {
+            const key = expr.word?.toLowerCase() || '';
+            if (!expressionsMap.has(key) || !expressionsMap.get(key).meaning) {
+                expressionsMap.set(key, expr);
+            }
+        });
+        analysisData.expressions = Array.from(expressionsMap.values());
+        
+        console.log(`Analysis complete: ${analysisData.translations.length} translations, ${analysisData.expressions.length} expressions`);
+        
+        // Update project with analysis data
+        project.analysisData = analysisData;
+        project.status = 'completed';
+        
+        // Set as current analysis
+        currentPage = 1;
+        currentAnalysis = analysisData;
+        displayAnalysis(analysisData);
+        
+        // Check which view is currently active
+        const isInSettings = settingsView.style.display === 'flex';
+        const isInSavedAnalyses = savedAnalysesView.style.display === 'flex';
+        const isInStudyModal = studyModal && studyModal.style.display !== 'none';
+        
+        // If analysis completes while user is in saved files view, switch to results
+        if (isInSavedAnalyses) {
+            savedAnalysesView.style.display = 'none';
+            uploadSection.style.display = 'none';
+            resultsSection.style.display = 'flex';
+            chatSection.style.display = 'none';
+            if (expressionsContent && expressionsContent.parentElement) {
+                expressionsContent.parentElement.style.display = 'none';
+            }
+        } else if (!isInSettings && !isInStudyModal) {
+            uploadSection.style.display = 'none';
+            resultsSection.style.display = 'flex';
+            chatSection.style.display = 'none';
+            if (expressionsContent && expressionsContent.parentElement) {
+                expressionsContent.parentElement.style.display = 'none';
+            }
+        }
+        
+        // Initialize chat history
+        currentChatHistory = [
+            {
+                role: 'system',
+                content: `You are helping the user understand Swedish subtitles. The user has just analyzed a subtitle file.
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list.`
+            },
+            {
+                role: 'assistant',
+                content: 'I\'ve analyzed your Swedish subtitle file. Feel free to ask me any questions about the translations, expressions, or grammar!'
+            }
+        ];
+        
+        // Update render
+        renderFileProjectsList();
+        
+    } catch (error) {
+        console.error('Analysis error:', error);
+        project.status = 'error';
+        renderFileProjectsList();
+        alert('Error during analysis: ' + error.message);
+    } finally {
+        isAnalyzing = false;
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = 'Analyze';
+        currentProjectId = null;
+    }
+}
+
+// Remove a project
+function removeProject(projectId) {
+    const projectIndex = fileProjects.findIndex(p => p.id === projectId);
+    if (projectIndex === -1) return;
+    
+    // If removing current project, reset
+    if (currentProjectId === projectId) {
+        currentProjectId = null;
+        currentSubtitleData = null;
+        currentAnalysis = null;
+        fileInfo.style.display = 'none';
+        resultsSection.style.display = 'none';
+    }
+    
+    fileProjects.splice(projectIndex, 1);
+    renderFileProjectsList();
+}
+
+    // Analyze button - works with current project or first ready project
     analyzeBtn.addEventListener('click', async () => {
+        // If currentProjectId is set, use it
+        if (currentProjectId) {
+            await analyzeProject(currentProjectId);
+            return;
+        }
+        
+        // Otherwise, find first ready project
+        const readyProject = fileProjects.find(p => p.status === 'ready');
+        if (readyProject) {
+            await analyzeProject(readyProject.id);
+            return;
+        }
+        
+        // Fallback to old behavior if no projects
         if (!currentSubtitleData || currentSubtitleData.length === 0) {
             alert('Please upload a valid .vtt or .txt file first.');
             return;
@@ -1134,8 +1439,18 @@ ${missingText}`;
             const isInSavedAnalyses = savedAnalysesView.style.display === 'flex';
             const isInStudyModal = studyModal && studyModal.style.display !== 'none';
             
-            // Only auto-switch to results if user is not in another view
-            if (!isInSettings && !isInSavedAnalyses && !isInStudyModal) {
+            // If analysis completes while user is in saved files view, switch to results
+            if (isInSavedAnalyses) {
+                savedAnalysesView.style.display = 'none';
+                uploadSection.style.display = 'none';
+                resultsSection.style.display = 'flex';
+                chatSection.style.display = 'none';
+                // Hide expressions section
+                if (expressionsContent && expressionsContent.parentElement) {
+                    expressionsContent.parentElement.style.display = 'none';
+                }
+            } else if (!isInSettings && !isInStudyModal) {
+                // Only auto-switch to results if user is not in another view
                 // Show results only (no chat or expressions in main view)
                 uploadSection.style.display = 'none';
                 resultsSection.style.display = 'flex';
@@ -1145,7 +1460,7 @@ ${missingText}`;
                     expressionsContent.parentElement.style.display = 'none';
                 }
             }
-            // If user is in settings/saved analyses, analysis data is already stored
+            // If user is in settings, analysis data is already stored
             // and will be shown when they return (handled by closeSettingsBtn)
             
             // Initialize chat history with analysis context
@@ -1640,6 +1955,15 @@ function removeChatMessage(messageId) {
     // Saved analyses view
     savedAnalysesBtn.addEventListener('click', async () => {
         console.log('Saved analyses button clicked');
+        
+        // Show warning if analysis is in progress
+        if (isAnalyzing) {
+            const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
+            if (!confirmLeave) {
+                return;
+            }
+        }
+        
         isEditMode = false; // Reset edit mode when opening
         await loadSavedAnalyses();
         if (editSavedBtn) {
@@ -1649,6 +1973,8 @@ function removeChatMessage(messageId) {
         resultsSection.style.display = 'none';
         uploadSection.style.display = 'none';
         chatSection.style.display = 'none';
+        // Note: Analysis continues in background if in progress
+        // Progress will be visible when returning to home window
     });
 
     // Edit/Delete button for saved analyses
@@ -2237,7 +2563,7 @@ async function openStudyModal(type, item, index, timestamp = null) {
     studyExpressionsSection.style.display = 'block'; // Always show the section
     
     if (type === 'translation') {
-        studyTitle.textContent = 'Study Translation';
+        studyTitle.textContent = 'Line-by-Line Study';
         let html = '';
         
         // Display timestamp at the top
@@ -2818,7 +3144,7 @@ async function sendStudyChatMessage() {
         
         // If Swedish word detected and user asked about it, send follow-up message
         if (detectedSwedishWord && isQuestionAboutSwedishWord) {
-            const followUpMessage = `Do you want to add "${detectedSwedishWord}" to the list?`;
+            const followUpMessage = `Do you want to add "${detectedSwedishWord}" to the list, Important Expressions & Words?`;
             // Store the original GPT response as a data attribute so button can access it
             const followUpId = addStudyChatMessage('assistant', followUpMessage, null);
             // Store the original GPT response content in a custom data attribute
@@ -3136,8 +3462,8 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                     displayExpressions();
         }
         
-        // Show confirmation (no save button needed for confirmation messages)
-        addStudyChatMessage('assistant', `Added "${dictionaryForm}" to Important Expressions & Words. Meaning: ${meaningText}`, null);
+        // Show confirmation popup
+        alert(`Added "${dictionaryForm}"`);
         
         console.log('Successfully added expression:', dictionaryForm);
         
@@ -3170,6 +3496,7 @@ function addStudyChatMessage(role, content, wordToSave = null) {
                               content.toLowerCase().includes('to the list');
     
     if (role === 'assistant' && isFollowUpMessage) {
+        bubbleContainer.classList.add('has-button');
         const saveBtn = document.createElement('button');
         saveBtn.className = 'add-to-list-btn';
         saveBtn.textContent = 'Add';

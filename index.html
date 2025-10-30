@@ -47,10 +47,11 @@
                         <polyline points="17 8 12 3 7 8"></polyline>
                         <line x1="12" y1="3" x2="12" y2="15"></line>
                     </svg>
-                    <p>Drag and drop a .vtt or .txt file here</p>
-                    <p class="upload-hint">or click to browse</p>
-                    <input type="file" id="fileInput" accept=".vtt,.txt" hidden>
+                    <p>Drag and drop .vtt or .txt file(s) here</p>
+                    <p class="upload-hint">or click to browse (multiple files supported)</p>
+                    <input type="file" id="fileInput" accept=".vtt,.txt" multiple hidden>
                 </div>
+                <div id="fileProjectsList" class="file-projects-list"></div>
                 <div id="fileInfo" class="file-info" style="display: none;">
                     <span id="fileName"></span>
                     <button id="analyzeBtn" class="analyze-btn">Analyze</button>
@@ -60,7 +61,10 @@
             <!-- Results Section -->
             <div id="resultsSection" class="results-section" style="display: none;">
                 <div class="results-header">
-                    <h2>Analysis Results</h2>
+                    <div class="results-header-title-section">
+                        <h2>Analysis Results</h2>
+                        <p class="results-header-hint">Click any translation line to study it in detail</p>
+                    </div>
                     <div class="results-header-buttons">
                         <button id="saveAnalysisBtn" class="save-btn">Save Analysis</button>
                         <button id="closeResultsBtn" class="close-results-btn" title="Close">×</button>

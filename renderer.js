@@ -15,7 +15,7 @@ let translationsContent, expressionsContent, chatSection, chatMessages, chatInpu
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
-let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn;
+let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn;
 let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
 
 // Study modal state
@@ -98,20 +98,20 @@ async function callOpenAI(messages, model = 'gpt-4o-mini') {
     if (!apiKey) {
         throw new Error('API key not set');
     }
-
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: messages,
-            temperature: 0.7,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: messages,
+                temperature: 0.7,
             max_tokens: 16000  // Increased from 4000 to allow larger responses and reduce API calls
-        })
-    });
+            })
+        });
 
     if (!response.ok) {
         const error = await response.json();
@@ -469,8 +469,18 @@ function parseVTT(content) {
         }
     }
 
-    console.log('parseVTT: Processed', lines.length, 'lines, created', subtitles.length, 'subtitle entries');
-    return subtitles;
+    // Deduplicate subtitles by text and timestamp to prevent duplicates
+    const subtitleMap = new Map();
+    subtitles.forEach(cue => {
+        const key = `${cue.start}-${cue.end}-${normalizeTextForMatching(cue.text || '')}`;
+        if (!subtitleMap.has(key)) {
+            subtitleMap.set(key, cue);
+        }
+    });
+    const deduplicatedSubtitles = Array.from(subtitleMap.values());
+    
+    console.log('parseVTT: Processed', lines.length, 'lines, created', deduplicatedSubtitles.length, 'subtitle entries', subtitles.length !== deduplicatedSubtitles.length ? `(${subtitles.length - deduplicatedSubtitles.length} duplicates removed)` : '');
+    return deduplicatedSubtitles;
 }
 
 // TXT Parser - creates empty timestamp placeholders
@@ -499,8 +509,18 @@ function parseTXT(content) {
         }
     });
     
-    console.log('parseTXT: Processed', lines.length, 'lines, created', subtitles.length, 'subtitle entries');
-    return subtitles;
+    // Deduplicate subtitles by text to prevent duplicates
+    const subtitleMap = new Map();
+    subtitles.forEach(cue => {
+        const normalizedText = normalizeTextForMatching(cue.text || '');
+        if (!subtitleMap.has(normalizedText)) {
+            subtitleMap.set(normalizedText, cue);
+        }
+    });
+    const deduplicatedSubtitles = Array.from(subtitleMap.values());
+    
+    console.log('parseTXT: Processed', lines.length, 'lines, created', deduplicatedSubtitles.length, 'subtitle entries', subtitles.length !== deduplicatedSubtitles.length ? `(${subtitles.length - deduplicatedSubtitles.length} duplicates removed)` : '');
+    return deduplicatedSubtitles;
 }
 
 // Initialize when DOM is ready
@@ -544,6 +564,7 @@ document.addEventListener('DOMContentLoaded', () => {
     studyChatSendBtn = document.getElementById('studyChatSendBtn');
     closeStudyBtn = document.getElementById('closeStudyBtn');
     studyHistoryBtn = document.getElementById('studyHistoryBtn');
+    saveStudyBtn = document.getElementById('saveStudyBtn');
     chatHistoryModal = document.getElementById('chatHistoryModal');
     chatHistoryContent = document.getElementById('chatHistoryContent');
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
@@ -811,7 +832,7 @@ Format:
 
 Entries:
 ${batchText}`;
-            
+
             const messages = [
                 {
                     role: 'system',
@@ -822,7 +843,7 @@ ${batchText}`;
                     content: batchPrompt
                 }
             ];
-            
+
             const content = await callOpenAI(messages);
             
             // Parse batch response
@@ -904,8 +925,22 @@ ${missingText}`;
                                 if (Array.isArray(missingTranslations) && missingTranslations.length > 0) {
                                     // Fix encoding for all missing translations
                                     const fixedMissing = missingTranslations.map(t => fixTranslationEncoding(t));
-                                    batchData.translations.push(...fixedMissing);
-                                    console.log(`Batch ${batchNumber}: Added ${missingTranslations.length} missing translations`);
+                                    
+                                    // Check for duplicates before adding
+                                    const existingSwedishTexts = new Set((batchData.translations || []).map(t => normalizeTextForMatching(t.swedish || '')));
+                                    const newTranslations = fixedMissing.filter(t => {
+                                        const normalizedSwedish = normalizeTextForMatching(t.swedish || '');
+                                        if (existingSwedishTexts.has(normalizedSwedish)) {
+                                            return false; // Skip duplicate
+                                        }
+                                        existingSwedishTexts.add(normalizedSwedish);
+                                        return true;
+                                    });
+                                    
+                                    if (newTranslations.length > 0) {
+                                        batchData.translations.push(...newTranslations);
+                                        console.log(`Batch ${batchNumber}: Added ${newTranslations.length} missing translations (${fixedMissing.length - newTranslations.length} duplicates skipped)`);
+                                    }
                                 }
                             } catch (parseError) {
                                 console.error(`Batch ${batchNumber}: Failed to parse missing translations:`, parseError);
@@ -935,14 +970,46 @@ ${missingText}`;
                             if (!batchData.translations) {
                                 batchData.translations = [];
                             }
-                            batchData.translations.push(fixTranslationEncoding({
-                                swedish: cue.text,
-                                literal: `[Translation needed: ${cue.text}]`,
-                                natural: null
-                            }));
+                            
+                            // Check if this placeholder would be a duplicate
+                            const normalizedCueText = normalizeTextForMatching(cueText);
+                            const alreadyHasPlaceholder = batchData.translations.some(t => 
+                                normalizeTextForMatching(t.swedish || '') === normalizedCueText
+                            );
+                            
+                            if (!alreadyHasPlaceholder) {
+                                batchData.translations.push(fixTranslationEncoding({
+                                    swedish: cue.text,
+                                    literal: `[Translation needed: ${cue.text}]`,
+                                    natural: null
+                                }));
+                            }
                         }
                     }
                 }
+            }
+            
+            // Deduplicate translations within this batch before adding to results
+            if (batchData.translations && batchData.translations.length > 0) {
+                const batchTranslationsMap = new Map();
+                batchData.translations.forEach(trans => {
+                    if (trans.swedish) {
+                        const normalizedKey = normalizeTextForMatching(trans.swedish);
+                        // Keep the first occurrence, or replace placeholder with actual translation
+                        if (!batchTranslationsMap.has(normalizedKey)) {
+                            batchTranslationsMap.set(normalizedKey, trans);
+                        } else {
+                            const existing = batchTranslationsMap.get(normalizedKey);
+                            // Replace placeholder with actual translation if we have one
+                            if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
+                                if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
+                                    batchTranslationsMap.set(normalizedKey, trans);
+                                }
+                            }
+                        }
+                    }
+                });
+                batchData.translations = Array.from(batchTranslationsMap.values());
             }
             
             results.push(batchData);
@@ -1001,11 +1068,12 @@ ${missingText}`;
             };
             
             // Merge translations from all batches
+            const allTranslationsBeforeDedup = [];
             batchResults.forEach(batch => {
                 if (batch.translations) {
                     // Fix encoding for all translations before adding
                     const fixedTranslations = batch.translations.map(t => fixTranslationEncoding(t));
-                    analysisData.translations.push(...fixedTranslations);
+                    allTranslationsBeforeDedup.push(...fixedTranslations);
                 }
                 if (batch.expressions) {
                     // Fix encoding for all expressions before adding
@@ -1013,6 +1081,35 @@ ${missingText}`;
                     analysisData.expressions.push(...fixedExpressions);
                 }
             });
+            
+            // Deduplicate translations (keep unique by normalized Swedish text)
+            const translationsMap = new Map();
+            
+            allTranslationsBeforeDedup.forEach(trans => {
+                if (trans.swedish) {
+                    // Ensure encoding is fixed before comparison
+                    const fixedSwedish = fixEncoding(trans.swedish.trim());
+                    const normalizedKey = normalizeTextForMatching(fixedSwedish);
+                    
+                    // Only add if not already present, preferring entries with actual translations over placeholders
+                    if (!translationsMap.has(normalizedKey)) {
+                        translationsMap.set(normalizedKey, trans);
+                    } else {
+                        const existing = translationsMap.get(normalizedKey);
+                        // Replace placeholder with actual translation if we have one
+                        if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
+                            if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
+                                translationsMap.set(normalizedKey, trans);
+                            }
+                        }
+                    }
+                }
+            });
+            analysisData.translations = Array.from(translationsMap.values());
+            
+            // Log deduplication results
+            const duplicatesRemoved = allTranslationsBeforeDedup.length - analysisData.translations.length;
+            console.log(`Deduplication complete: ${analysisData.translations.length} unique translations from ${allTranslationsBeforeDedup.length} total (removed ${duplicatesRemoved} duplicates)`);
             
             // Deduplicate expressions (keep unique by word)
             const expressionsMap = new Map();
@@ -1028,7 +1125,7 @@ ${missingText}`;
 
             // Reset pagination to first page for new analysis
             currentPage = 1;
-            
+
             currentAnalysis = analysisData;
             displayAnalysis(analysisData);
             
@@ -1356,7 +1453,7 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                 const swedishText = currentStudyItem.item.swedish.toLowerCase();
                 if (swedishText.includes(word.toLowerCase())) {
                     if (studyExpressionsContent && studyExpressionsSection) {
-                        displayStudyExpressions();
+                                displayStudyExpressions();
                     }
                 }
             }
@@ -1883,6 +1980,38 @@ async function reopenAnalysis(savedItem) {
     currentChatHistory = savedItem.chatHistory || [];
     currentSubtitleData = savedItem.subtitleData;
     
+    // Apply deduplication to saved analysis (in case it was saved before deduplication was added)
+    if (currentAnalysis && currentAnalysis.translations && currentAnalysis.translations.length > 0) {
+        const translationsMap = new Map();
+        
+        currentAnalysis.translations.forEach(trans => {
+            if (trans.swedish) {
+                const fixedSwedish = fixEncoding(trans.swedish.trim());
+                const normalizedKey = normalizeTextForMatching(fixedSwedish);
+                
+                // Only add if not already present, preferring entries with actual translations over placeholders
+                if (!translationsMap.has(normalizedKey)) {
+                    translationsMap.set(normalizedKey, trans);
+                } else {
+                    const existing = translationsMap.get(normalizedKey);
+                    // Replace placeholder with actual translation if we have one
+                    if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
+                        if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
+                            translationsMap.set(normalizedKey, trans);
+                        }
+                    }
+                }
+            }
+        });
+        
+        const duplicatesRemoved = currentAnalysis.translations.length - translationsMap.size;
+        currentAnalysis.translations = Array.from(translationsMap.values());
+        
+        if (duplicatesRemoved > 0) {
+            console.log(`Deduplication applied to saved analysis: ${currentAnalysis.translations.length} unique translations (removed ${duplicatesRemoved} duplicates)`);
+        }
+    }
+    
     // Reset pagination to first page when reopening saved analysis
     currentPage = 1;
     
@@ -2017,6 +2146,13 @@ async function reopenAnalysis(savedItem) {
         showChatHistory(currentStudyChatHistory);
     });
 
+    // Save study session button
+    if (saveStudyBtn) {
+        saveStudyBtn.addEventListener('click', async () => {
+            await saveStudySession();
+        });
+    }
+
     // Close modal when clicking outside
     studyModal.addEventListener('click', (e) => {
         if (e.target === studyModal) {
@@ -2091,7 +2227,7 @@ function formatTimestamp(timestamp) {
 }
 
 // Open study modal with selected item
-function openStudyModal(type, item, index, timestamp = null) {
+async function openStudyModal(type, item, index, timestamp = null) {
     currentStudyItem = { type, item, index, timestamp };
     currentStudyChatHistory = [];
     
@@ -2129,26 +2265,26 @@ function openStudyModal(type, item, index, timestamp = null) {
         // Get related expressions for chat context (used in system message)
         let relatedExpressions = [];
         if (currentAnalysis && currentAnalysis.expressions && currentAnalysis.expressions.length > 0) {
-            const swedishText = item.swedish.toLowerCase();
+                    const swedishText = item.swedish.toLowerCase();
             relatedExpressions = currentAnalysis.expressions.filter(expr => {
                 // Check by translationIndex first
                 if (expr.translationIndex !== undefined && expr.translationIndex === index) {
                     return true;
                 }
                 // Fallback: check if word appears in Swedish text
-                const word = expr.word.toLowerCase();
-                return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
+                    const word = expr.word.toLowerCase();
+                    return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
             });
         }
         
         // Initialize chat with context
-        const relatedExprsText = relatedExpressions.length > 0
-            ? relatedExpressions.map(expr => `${expr.word}: ${expr.meaning || 'N/A'}`).join('; ')
-            : '';
-        
+                const relatedExprsText = relatedExpressions.length > 0
+                    ? relatedExpressions.map(expr => `${expr.word}: ${expr.meaning || 'N/A'}`).join('; ')
+                    : '';
+                
         currentStudyChatHistory = [
             {
-                role: 'system',
+                    role: 'system',
                 content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${item.swedish}". Literal translation: "${item.literal || 'N/A'}". ${item.natural && item.natural !== item.literal ? `Natural translation: "${item.natural}".` : ''} ${relatedExprsText ? `Related expressions in this phrase: ${relatedExprsText}.` : ''}
 
 CRITICAL: Always format your responses using this EXACT markdown structure:
@@ -2189,7 +2325,7 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Initialize chat with context
         currentStudyChatHistory = [
             {
-                role: 'system',
+                    role: 'system',
                 content: `You are helping the user study Swedish. They are looking at this Swedish expression/word: "${item.word}". Meaning: "${item.meaning || 'N/A'}". ${item.example ? `Example: "${item.example}".` : ''}
 
 CRITICAL: Always format your responses using this EXACT markdown structure:
@@ -2214,12 +2350,205 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         ];
     }
     
-    // Clear chat messages
+    // Clear chat messages and input (for fresh chat start)
     studyChatMessages.innerHTML = '';
     studyChatInput.value = '';
     
     // Show modal
     studyModal.style.display = 'flex';
+    
+    // Load saved study session if exists (expressions will be restored, but chat stays empty)
+    await loadStudySession();
+    
+    // Ensure chat area remains empty after loading (history is available via Chat history button only)
+    studyChatMessages.innerHTML = '';
+    studyChatInput.value = '';
+}
+
+// Save study session (expressions and chat history)
+async function saveStudySession() {
+    if (!currentStudyItem || !currentAnalysis) {
+        alert('No study session to save.');
+        return;
+    }
+
+    try {
+        // Get expressions associated with this translation
+        let associatedExpressions = [];
+        if (currentAnalysis.expressions && currentAnalysis.expressions.length > 0) {
+            if (currentStudyItem.type === 'translation') {
+                const translationIndex = currentStudyItem.index;
+                const swedishText = currentStudyItem.item.swedish.toLowerCase();
+                
+                associatedExpressions = currentAnalysis.expressions.filter(expr => {
+                    // Check if expression is associated with this translation
+                    if (expr.translationIndex !== undefined && expr.translationIndex === translationIndex) {
+                        return true;
+                    }
+                    // Backward compatibility: check if word appears in Swedish text
+                    if (expr.translationIndex === undefined) {
+                        const exprWord = expr.word.toLowerCase();
+                        return swedishText.includes(exprWord) || exprWord.split(' ').some(w => swedishText.includes(w));
+                    }
+                    return false;
+                });
+            }
+        }
+
+        // Create study session data
+        const studySession = {
+            id: `${currentStudyItem.index}-${Date.now()}`,
+            translationIndex: currentStudyItem.index,
+            swedishText: currentStudyItem.item.swedish,
+            fileName: fileName.textContent || 'unknown',
+            date: new Date().toISOString(),
+            expressions: associatedExpressions.map(expr => ({
+                word: expr.word,
+                meaning: expr.meaning,
+                example: expr.example,
+                translationIndex: expr.translationIndex,
+                translationText: expr.translationText
+            })),
+            chatHistory: currentStudyChatHistory.filter(msg => msg.role !== 'system') // Don't save system messages
+        };
+
+        // Load existing study sessions
+        let savedSessions = [];
+        if (window.electronAPI && window.electronAPI.loadStudySessions) {
+            try {
+                const result = await window.electronAPI.loadStudySessions();
+                if (result && result.success) {
+                    savedSessions = result.data || [];
+                }
+            } catch (error) {
+                console.error('Error loading study sessions:', error);
+                // Continue with empty array if load fails
+                savedSessions = [];
+            }
+        }
+
+        // Check if session already exists for this translation (replace it)
+        const existingIndex = savedSessions.findIndex(s => 
+            s.translationIndex === studySession.translationIndex && 
+            s.swedishText === studySession.swedishText &&
+            s.fileName === studySession.fileName
+        );
+
+        if (existingIndex >= 0) {
+            savedSessions[existingIndex] = studySession;
+        } else {
+            savedSessions.push(studySession);
+        }
+
+        // Save updated sessions
+        if (window.electronAPI && window.electronAPI.saveStudySessions) {
+            try {
+                const saveResult = await window.electronAPI.saveStudySessions(savedSessions);
+                if (saveResult && saveResult.success) {
+                    alert('Study session saved!');
+                } else {
+                    alert('Error saving study session: ' + (saveResult?.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving study session:', error);
+                alert('Error saving study session: ' + error.message);
+            }
+        } else {
+            alert('Storage API not available. Please restart the application.');
+        }
+    } catch (error) {
+        console.error('Error saving study session:', error);
+        alert('Error saving study session: ' + error.message);
+    }
+}
+
+// Load saved study session for current translation
+async function loadStudySession() {
+    if (!currentStudyItem || !currentAnalysis) {
+        return;
+    }
+
+    try {
+        // Load saved study sessions
+        let savedSessions = [];
+        if (window.electronAPI && window.electronAPI.loadStudySessions) {
+            try {
+                const result = await window.electronAPI.loadStudySessions();
+                if (result && result.success) {
+                    savedSessions = result.data || [];
+                }
+            } catch (error) {
+                console.error('Error loading study sessions:', error);
+                // Continue with empty array if load fails
+                savedSessions = [];
+            }
+        }
+
+        // Find session for this translation
+        const currentFileName = fileName.textContent || 'unknown';
+        const savedSession = savedSessions.find(s => 
+            s.translationIndex === currentStudyItem.index &&
+            s.swedishText === currentStudyItem.item.swedish &&
+            s.fileName === currentFileName
+        );
+
+        if (savedSession) {
+            // Restore chat history (add system message back) for Chat history button only
+            // Do NOT display messages in the main chat area - keep it empty for fresh start
+            if (savedSession.chatHistory && savedSession.chatHistory.length > 0) {
+                currentStudyChatHistory = [
+                    {
+                        role: 'system',
+                        content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${currentStudyItem.item.swedish}". Literal translation: "${currentStudyItem.item.literal || 'N/A'}". ${currentStudyItem.item.natural && currentStudyItem.item.natural !== currentStudyItem.item.literal ? `Natural translation: "${currentStudyItem.item.natural}".` : ''}
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this translation, its grammar, vocabulary, or related Swedish language concepts, always using this format.`
+                    },
+                    ...savedSession.chatHistory
+                ];
+                // Note: Chat messages are NOT displayed in UI - only stored for Chat history button
+            }
+
+            // Restore expressions (merge with existing, avoiding duplicates)
+            if (savedSession.expressions && savedSession.expressions.length > 0) {
+                if (!currentAnalysis.expressions) {
+                    currentAnalysis.expressions = [];
+                }
+
+                savedSession.expressions.forEach(savedExpr => {
+                    // Check if expression already exists
+                    const exists = currentAnalysis.expressions.some(expr => 
+                        normalizeTextForMatching(expr.word || '') === normalizeTextForMatching(savedExpr.word || '')
+                    );
+
+                    if (!exists) {
+                        currentAnalysis.expressions.push(savedExpr);
+                    }
+                });
+
+                // Update display
+                displayStudyExpressions();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading study session:', error);
+    }
 }
 
 // Close study modal
@@ -2415,23 +2744,68 @@ async function sendStudyChatMessage() {
     try {
         const assistantMessage = await callOpenAI(currentStudyChatHistory);
         
-        // Extract word from response if not already extracted
-        if (!wordToSave) {
-            // Try to find quoted words first
-            const responseWordMatch = assistantMessage.match(/["']([^"']+)["']/);
-            if (responseWordMatch) {
-                wordToSave = responseWordMatch[1];
-            } else {
-                // Look for patterns like "The word X" or "X means"
-                const wordPatternMatch = assistantMessage.match(/(?:word|expression)\s+["']?([\wåäöÅÄÖ]+)["']?/i);
-                if (wordPatternMatch) {
-                    wordToSave = wordPatternMatch[1];
-                } else {
-                    // Look for Swedish words (with åäö characters) in the response
-                    const swedishWordMatch = assistantMessage.match(/\b([\wåäöÅÄÖ]{3,})\b/);
-                    if (swedishWordMatch) {
-                        wordToSave = swedishWordMatch[1];
+        // Extract Swedish word from GPT response using improved detection
+        let detectedSwedishWord = null;
+        
+        // Check if user's question was about a Swedish word/expression
+        const userMessage = currentStudyChatHistory[currentStudyChatHistory.length - 1]?.content || '';
+        const isQuestionAboutSwedishWord = /(?:what|how|explain|tell|about|mean|meaning|word|expression|phrase)/i.test(userMessage) ||
+                                          /["']([^"']+)["']/.test(userMessage) ||
+                                          /[\wåäöÅÄÖ]{2,}/.test(userMessage);
+        
+        // Only detect Swedish words if user asked about a word/expression
+        if (isQuestionAboutSwedishWord) {
+            // Pattern 1: Extract from markdown format "📘 Swedish [Type]: [Word]"
+            const markdownPattern = /Swedish\s+(?:Verb|Noun|Adjective|Adverb|Phrase|word|expression|phrase):\s*([^\n]+)/i;
+            const markdownMatch = assistantMessage.match(markdownPattern);
+            if (markdownMatch) {
+                detectedSwedishWord = markdownMatch[1].trim();
+                // Clean up: remove any quotes or extra text after the word
+                detectedSwedishWord = detectedSwedishWord.replace(/^["']|["']$/g, '').split(/[–\-\n]/)[0].trim();
+            }
+            
+            // Pattern 2: Quoted words like "word" or 'word'
+            if (!detectedSwedishWord) {
+                const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
+                const quotedMatches = [...assistantMessage.matchAll(quotedPattern)];
+                if (quotedMatches.length > 0) {
+                    // Find the first quoted word that looks like Swedish
+                    for (const match of quotedMatches) {
+                        const candidate = match[1].trim();
+                        // Check if it's likely Swedish (has åäö or looks like a Swedish word)
+                        if (/[åäöÅÄÖ]/.test(candidate) || 
+                            (candidate.length >= 2 && 
+                             !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should', 'what', 'how', 'why', 'when', 'where', 'who', 'is', 'are', 'was', 'were', 'it', 'he', 'she', 'we', 'you', 'me', 'my', 'your', 'his', 'her', 'our', 'does', 'do', 'did', 'can', 'may', 'must', 'should', 'mean', 'means', 'meaning'].includes(candidate.toLowerCase()))) {
+                            detectedSwedishWord = candidate;
+                            break;
+                        }
                     }
+                }
+            }
+            
+            // Pattern 3: Look for Swedish words with åäö characters
+            if (!detectedSwedishWord) {
+                const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
+                const swedishMatches = [...assistantMessage.matchAll(swedishWordPattern)];
+                const swedishWords = swedishMatches
+                    .map(m => m[1])
+                    .filter(w => {
+                        const lower = w.toLowerCase();
+                        // Include if has Swedish characters, or is longer than 2 chars and not a common English word
+                        return /[åäöÅÄÖ]/.test(w) || 
+                               (w.length >= 2 && 
+                                !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should', 'what', 'how', 'why', 'when', 'where', 'who', 'is', 'are', 'was', 'were', 'it', 'he', 'she', 'we', 'you', 'me', 'my', 'your', 'his', 'her', 'our', 'does', 'do', 'did', 'can', 'may', 'must', 'should', 'mean', 'means', 'meaning', 'english', 'swedish'].includes(lower));
+                    });
+                if (swedishWords.length > 0) {
+                    detectedSwedishWord = swedishWords[0].trim();
+                }
+            }
+            
+            // Pattern 4: Look for "Swedish word: X" patterns
+            if (!detectedSwedishWord) {
+                const patternMatch = assistantMessage.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.\n]+)/i);
+                if (patternMatch) {
+                    detectedSwedishWord = patternMatch[1].trim();
                 }
             }
         }
@@ -2441,6 +2815,19 @@ async function sendStudyChatMessage() {
         addStudyChatMessage('assistant', assistantMessage, wordToSave);
         
         currentStudyChatHistory.push({ role: 'assistant', content: assistantMessage });
+        
+        // If Swedish word detected and user asked about it, send follow-up message
+        if (detectedSwedishWord && isQuestionAboutSwedishWord) {
+            const followUpMessage = `Do you want to add "${detectedSwedishWord}" to the list?`;
+            // Store the original GPT response as a data attribute so button can access it
+            const followUpId = addStudyChatMessage('assistant', followUpMessage, null);
+            // Store the original GPT response content in a custom data attribute
+            const followUpElement = document.getElementById(followUpId);
+            if (followUpElement) {
+                followUpElement.dataset.originalGptResponse = assistantMessage;
+            }
+            currentStudyChatHistory.push({ role: 'assistant', content: followUpMessage });
+        }
         
     } catch (error) {
         console.error('Study chat error:', error);
@@ -2497,7 +2884,7 @@ async function addExpressionFromStudyChat(word, gptResponseContent = null) {
                 const attMatch = gptResponseContent.match(attPattern);
                 if (attMatch) {
                     dictionaryForm = `att ${attMatch[1]}`;
-                } else {
+                        } else {
                     // Look for "the [form] form of the verb '[word]'" pattern
                     // Example: "the imperative form of the verb 'titta'"
                     const verbFormPattern = /(?:the\s+\w+\s+form\s+of\s+)?the\s+verb\s+["']([\wåäöÅÄÖ]+)["']/i;
@@ -2570,15 +2957,23 @@ async function addExpressionFromStudyChat(word, gptResponseContent = null) {
             }
         }
         
-        // If no meanings extracted, ask GPT for the meaning
+        // If no meanings extracted from GPT response or no GPT response provided, ask GPT for the meaning
         let meaningText = meanings.join(' or ');
-        if (!meaningText) {
-            const meaningPrompt = `What does the Swedish word "${dictionaryForm}" mean in English? Provide a brief, clear definition.`;
+        if (!meaningText || !gptResponseContent) {
+            // If we have gptResponseContent but no meanings, try parsing it again
+            if (gptResponseContent && !meaningText) {
+                // Already tried parsing above, will proceed to GPT call
+            }
+            
+            // Call GPT to get the meaning and dictionary form
+            const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide the dictionary form (e.g., "att titta" for verbs) and a brief, clear definition.`;
             console.log('Calling OpenAI for meaning...');
-            const meaningResponse = await callOpenAI([
-                {
-                    role: 'system',
-                    content: `You are a Swedish language tutor. 
+            
+            try {
+                const meaningResponse = await callOpenAI([
+                        {
+                            role: 'system',
+                        content: `You are a Swedish language tutor. 
 
 CRITICAL: Always format your responses using this EXACT markdown structure:
 
@@ -2598,40 +2993,94 @@ CRITICAL: Always format your responses using this EXACT markdown structure:
 	3.	[Swedish example sentence] – [English translation]
 
 You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Provide clear, concise definitions.`
-                },
-                {
-                    role: 'user',
-                    content: meaningPrompt
-                }
-            ]);
-            
-            // Validate response
-            if (!meaningResponse || typeof meaningResponse !== 'string') {
-                throw new Error('Invalid response from API');
-            }
-            
-            // Extract meanings from response
-            const meaningPatterns2 = [
-                /means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi,
-                /which\s+means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi
-            ];
-            
-            for (const pattern of meaningPatterns2) {
-                const matches = [...meaningResponse.matchAll(pattern)];
-                if (matches.length > 0) {
-                    for (const match of matches) {
-                        if (match[1] && match[1].trim()) {
-                            meanings.push(match[1].trim());
+                        },
+                        {
+                            role: 'user',
+                            content: meaningPrompt
                         }
-                        if (match[2] && match[2].trim()) {
-                            meanings.push(match[2].trim());
+                    ]);
+                
+                // Validate response
+                if (!meaningResponse || typeof meaningResponse !== 'string') {
+                    throw new Error('Invalid response from API');
+                }
+                
+                // If we don't have a dictionary form yet, try to extract it from GPT response
+                if (dictionaryForm === word && meaningResponse) {
+                    // Extract word type
+                    const typeMatch = meaningResponse.match(/Swedish\s+(Verb|Noun|Adjective|Adverb|Phrase)/i);
+                    if (typeMatch) {
+                        wordType = typeMatch[1].toLowerCase();
+                    }
+                    
+                    // Extract dictionary form for verbs
+                    if (wordType === 'verb') {
+                        const attPattern = /att\s+([\wåäöÅÄÖ]+)/i;
+                        const attMatch = meaningResponse.match(attPattern);
+                        if (attMatch) {
+                            dictionaryForm = `att ${attMatch[1]}`;
+                        } else {
+                            // Look for verb patterns
+                            const verbPattern = /verb\s+["']([\wåäöÅÄÖ]+)["']/i;
+                            const verbMatch = meaningResponse.match(verbPattern);
+                            if (verbMatch) {
+                                dictionaryForm = `att ${verbMatch[1].toLowerCase()}`;
+                            } else {
+                                dictionaryForm = `att ${word.toLowerCase()}`;
+                            }
                         }
                     }
-                    if (meanings.length > 0) break;
+                    
+                    // Extract word from markdown format if available
+                    const wordMatch = meaningResponse.match(/Swedish\s+(?:Verb|Noun|Adjective|Adverb|Phrase|word|expression|phrase):\s*([^\n]+)/i);
+                    if (wordMatch) {
+                        const extractedWord = wordMatch[1].trim().replace(/^["']|["']$/g, '').split(/[–\-\n]/)[0].trim();
+                        if (extractedWord && extractedWord.length > 0) {
+                            if (wordType === 'verb' && !extractedWord.startsWith('att ')) {
+                                dictionaryForm = `att ${extractedWord.toLowerCase()}`;
+                            } else {
+                                dictionaryForm = extractedWord;
+                            }
+                        }
+                    }
                 }
+                
+                // Extract meanings from response
+                const meaningPatterns2 = [
+                    /means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi,
+                    /which\s+means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi
+                ];
+                
+                for (const pattern of meaningPatterns2) {
+                    const matches = [...meaningResponse.matchAll(pattern)];
+                    if (matches.length > 0) {
+                        for (const match of matches) {
+                            if (match[1] && match[1].trim() && !/[åäöÅÄÖ]/.test(match[1])) {
+                                const meaning = match[1].trim();
+                                if (wordType === 'verb' && !meaning.startsWith('to ')) {
+                                    meanings.push(`to ${meaning}`);
+                                } else {
+                                    meanings.push(meaning);
+                                }
+                            }
+                            if (match[2] && match[2].trim() && !/[åäöÅÄÖ]/.test(match[2])) {
+                                const meaning = match[2].trim();
+                                if (wordType === 'verb' && !meaning.startsWith('to ')) {
+                                    meanings.push(`to ${meaning}`);
+                                } else {
+                                    meanings.push(meaning);
+                                }
+                            }
+                        }
+                        if (meanings.length > 0) break;
+                    }
+                }
+                
+                meaningText = meanings.length > 0 ? meanings.join(' or ') : meaningResponse.trim();
+            } catch (error) {
+                console.error('Error calling GPT for meaning:', error);
+                throw error; // Re-throw to be caught by outer try-catch
             }
-            
-            meaningText = meanings.length > 0 ? meanings.join(' or ') : meaningResponse.trim();
         }
         
         // Clean up dictionary form
@@ -2678,13 +3127,13 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Only call if DOM elements exist (study modal is open)
         if (studyExpressionsContent && studyExpressionsSection) {
             console.log('Updating study expressions display...');
-            displayStudyExpressions();
+                    displayStudyExpressions();
         }
         
         // Also update main expressions display if visible
         if (resultsSection && resultsSection.style.display !== 'none' && expressionsContent) {
             console.log('Updating main expressions display...');
-            displayExpressions();
+                    displayExpressions();
         }
         
         // Show confirmation (no save button needed for confirmation messages)
@@ -2716,92 +3165,59 @@ function addStudyChatMessage(role, content, wordToSave = null) {
     
     bubbleContainer.appendChild(bubble);
     
-    // Add save button for all assistant messages - outside the bubble
-    if (role === 'assistant') {
+    // Add "Add" button only for follow-up messages asking to add expression/word
+    const isFollowUpMessage = content.toLowerCase().includes('do you want to add') && 
+                              content.toLowerCase().includes('to the list');
+    
+    if (role === 'assistant' && isFollowUpMessage) {
         const saveBtn = document.createElement('button');
         saveBtn.className = 'add-to-list-btn';
-        saveBtn.textContent = 'add on the list +';
-        saveBtn.title = 'Add words from this response to Important Expressions & Words';
+        saveBtn.textContent = 'Add';
+        saveBtn.title = 'Add this word/expression to Important Expressions & Words';
         saveBtn.addEventListener('click', async () => {
             try {
-                // Extract Swedish words from the message content
-                // Try multiple patterns to find Swedish words
+                // Extract word from follow-up message: "Do you want to add 'hem' to the list?"
                 let word = null;
                 
-                // Pattern 1: Extract from markdown format "📘 Swedish [Type]: [Word]"
-                const markdownPattern = /Swedish\s+(?:Verb|Noun|Adjective|Adverb|Phrase|word|expression|phrase):\s*([^\n]+)/i;
-                const markdownMatch = content.match(markdownPattern);
-                if (markdownMatch) {
-                    word = markdownMatch[1].trim();
-                    // Clean up: remove any quotes or extra text after the word
-                    word = word.replace(/^["']|["']$/g, '').split(/[–\-\n]/)[0].trim();
-                }
-                
-                // Pattern 2: Quoted words like "word" or 'word' (in the format "[Word]" is...)
-                if (!word) {
-                    const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
-                    const quotedMatches = [...content.matchAll(quotedPattern)];
-                    if (quotedMatches.length > 0) {
-                        // Find the first quoted word that looks like Swedish (has åäö or is longer than 3 chars)
-                        for (const match of quotedMatches) {
-                            const candidate = match[1].trim();
-                            if (/[åäöÅÄÖ]/.test(candidate) || (candidate.length > 3 && !/^(the|and|that|this|with|from|have|been|will|they|there|would|could|should)$/i.test(candidate))) {
-                                word = candidate;
-                                break;
-                            }
-                        }
+                // Extract word from quotes in the message
+                const quotedMatch = content.match(/add\s+['"]([^'"]+)['"]/i);
+                if (quotedMatch) {
+                    word = quotedMatch[1].trim();
+                } else {
+                    // Try alternative pattern: "add [word] to"
+                    const wordMatch = content.match(/add\s+([^\s]+)/i);
+                    if (wordMatch) {
+                        word = wordMatch[1].trim().replace(/['"]/g, '');
                     }
                 }
                 
-                // Pattern 3: Look for Swedish words with åäö characters
                 if (!word) {
-                    const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
-                    const swedishMatches = [...content.matchAll(swedishWordPattern)];
-                    // Filter out common English words and look for Swedish-specific patterns
-                    const swedishWords = swedishMatches
-                        .map(m => m[1])
-                        .filter(w => /[åäöÅÄÖ]/.test(w) || w.length > 3)
-                        .filter(w => !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should'].includes(w.toLowerCase()));
-                    if (swedishWords.length > 0) {
-                        word = swedishWords[0].trim();
-                    }
-                }
-                
-                // Pattern 4: Look for "Swedish word: X" patterns
-                if (!word) {
-                    const patternMatch = content.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.\n]+)/i);
-                    if (patternMatch) {
-                        word = patternMatch[1].trim();
-                    }
-                }
-                
-                // If still no word found, prompt user
-                if (!word) {
-                    word = prompt('Enter the Swedish word/phrase to add:');
-                    if (!word || !word.trim()) {
-                        return; // User cancelled
-                    }
-                    word = word.trim();
+                    alert('Could not extract word from message. Please try again.');
+                    return;
                 }
                 
                 // Add the word
                 saveBtn.disabled = true;
                 saveBtn.textContent = 'saving...';
                 
-                // Pass the full content to extract dictionary form and meanings
-                await addExpressionFromStudyChat(word, content);
+                // Get the original GPT response from the message element's data attribute
+                const messageElement = saveBtn.closest('.study-chat-message');
+                const originalGptResponse = messageElement?.dataset?.originalGptResponse || null;
+                
+                // Pass the original GPT response to extract dictionary form and meanings
+                await addExpressionFromStudyChat(word, originalGptResponse);
                 
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'added ✓';
                 setTimeout(() => {
-                    saveBtn.textContent = 'add on the list +';
+                    saveBtn.textContent = 'Add';
                 }, 2000);
             } catch (error) {
-                console.error('Error in save button click handler:', error);
+                console.error('Error adding expression:', error);
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'error, try again';
                 setTimeout(() => {
-                    saveBtn.textContent = 'add on the list +';
+                    saveBtn.textContent = 'Add';
                 }, 2000);
             }
         });

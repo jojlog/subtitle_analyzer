@@ -1235,6 +1235,13 @@ body.theme-purple .add-to-list-btn:hover {
     align-items: center;
 }
 
+.study-header-actions .save-btn,
+.study-header-actions .close-btn {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
 /* Chat history styles */
 .chat-history-content {
     display: flex;

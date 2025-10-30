@@ -128,3 +128,30 @@ ipcMain.handle('load-theme', async () => {
   }
 });
 
+// IPC Handlers for saved study sessions
+ipcMain.handle('save-study-sessions', async (event, data) => {
+  try {
+    const filePath = getDataFilePath('saved_study_sessions.json');
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+    return { success: true };
+  } catch (error) {
+    console.error('Error saving study sessions:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('load-study-sessions', async () => {
+  try {
+    const filePath = getDataFilePath('saved_study_sessions.json');
+    const data = await fs.readFile(filePath, 'utf8');
+    return { success: true, data: JSON.parse(data) };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      // File doesn't exist yet, return empty array
+      return { success: true, data: [] };
+    }
+    console.error('Error loading study sessions:', error);
+    return { success: false, error: error.message, data: [] };
+  }
+});
+

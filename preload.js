@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Theme
   saveTheme: (theme) => ipcRenderer.invoke('save-theme', theme),
-  loadTheme: () => ipcRenderer.invoke('load-theme')
+  loadTheme: () => ipcRenderer.invoke('load-theme'),
+  
+  // Study sessions
+  saveStudySessions: (data) => ipcRenderer.invoke('save-study-sessions', data),
+  loadStudySessions: () => ipcRenderer.invoke('load-study-sessions')
 });
 

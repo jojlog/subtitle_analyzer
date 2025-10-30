@@ -5,6 +5,10 @@ let currentSubtitleData = null;
 let apiKey = null;
 let isAnalyzing = false;
 
+// Pagination state
+let currentPage = 1;
+let itemsPerPage = 50;
+
 // DOM elements (will be initialized when DOM is ready)
 let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, resultsSection, uploadSection;
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
@@ -105,7 +109,7 @@ async function callOpenAI(messages, model = 'gpt-4o-mini') {
             model: model,
             messages: messages,
             temperature: 0.7,
-            max_tokens: 4000
+            max_tokens: 16000  // Increased from 4000 to allow larger responses and reduce API calls
         })
     });
 
@@ -116,6 +120,289 @@ async function callOpenAI(messages, model = 'gpt-4o-mini') {
 
     const data = await response.json();
     return data.choices[0].message.content;
+}
+
+// Helper function to check if text is valid subtitle dialogue (not metadata)
+function isValidSubtitleText(text) {
+    if (!text || typeof text !== 'string') {
+        return false;
+    }
+    
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return false;
+    }
+    
+    // Remove common punctuation and whitespace for analysis
+    const normalized = trimmed.replace(/[.,\s\-–—…]/g, '');
+    
+    // Check if text is purely numeric (e.g., "35, 36, 37" or "3581511172")
+    if (/^\d+$/.test(normalized)) {
+        return false;
+    }
+    
+    // Check if text is mostly numbers with separators (e.g., "35, 36, 37, 38, 39")
+    const numericRatio = (normalized.match(/\d/g) || []).length / Math.max(normalized.length, 1);
+    if (numericRatio > 0.8 && normalized.length > 5) {
+        return false;
+    }
+    
+    // Check if text ends with a long numeric sequence (likely an ID)
+    // Pattern: ends with 8+ digits
+    if (/\d{8,}$/.test(trimmed)) {
+        return false;
+    }
+    
+    // Check if text is a sequence pattern like "35, 36, 37, 38, 39..."
+    if (/^\d+[,\s]*\d+[,\s]*\d+[,\s]*\d+/.test(trimmed) && /^\d+[,\s\.]+$/.test(trimmed.replace(/\s/g, ''))) {
+        return false;
+    }
+    
+    // Check if text contains actual letters (Swedish or English)
+    // This ensures we have dialogue, not just numbers and punctuation
+    if (!/[a-zA-ZåäöÅÄÖ]/.test(trimmed)) {
+        return false;
+    }
+    
+    return true;
+}
+
+// Helper function to fix encoding in translation objects
+function fixTranslationEncoding(translation) {
+    if (!translation || typeof translation !== 'object') {
+        return translation;
+    }
+    
+    const fixed = { ...translation };
+    
+    if (fixed.swedish && typeof fixed.swedish === 'string') {
+        fixed.swedish = fixEncoding(fixed.swedish);
+    }
+    if (fixed.literal && typeof fixed.literal === 'string') {
+        fixed.literal = fixEncoding(fixed.literal);
+    }
+    if (fixed.natural && typeof fixed.natural === 'string') {
+        fixed.natural = fixEncoding(fixed.natural);
+    }
+    if (fixed.word && typeof fixed.word === 'string') {
+        fixed.word = fixEncoding(fixed.word);
+    }
+    if (fixed.meaning && typeof fixed.meaning === 'string') {
+        fixed.meaning = fixEncoding(fixed.meaning);
+    }
+    if (fixed.example && typeof fixed.example === 'string') {
+        fixed.example = fixEncoding(fixed.example);
+    }
+    
+    return fixed;
+}
+
+// Helper function to fix encoding issues (UTF-8 misinterpreted as ISO-8859-1)
+function fixEncoding(text) {
+    if (!text || typeof text !== 'string') {
+        return text;
+    }
+    
+    // Decode HTML entities first (in case text was HTML-encoded)
+    let fixed = text
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&#228;/g, 'ä')
+        .replace(/&#196;/g, 'Ä')
+        .replace(/&#229;/g, 'å')
+        .replace(/&#197;/g, 'Å')
+        .replace(/&#246;/g, 'ö')
+        .replace(/&#214;/g, 'Ö');
+    
+    // Common UTF-8 to ISO-8859-1 misinterpretations for Swedish characters
+    // These patterns occur when UTF-8 text is read as ISO-8859-1 or Windows-1252
+    fixed = fixed
+        // Fix ä characters (UTF-8: C3 A4, misread as: Ã¤)
+        .replace(/Ã¤/g, 'ä')
+        .replace(/Ã„/g, 'Ä')
+        // Fix å characters (UTF-8: C3 A5, misread as: Ã¥)
+        .replace(/Ã¥/g, 'å')
+        .replace(/Ã…/g, 'Å')
+        .replace(/Ã°/g, 'å')
+        // Fix ö characters (UTF-8: C3 B6, misread as: Ã¶)
+        .replace(/Ã¶/g, 'ö')
+        .replace(/Ã–/g, 'Ö')
+        // Fix common double-encoding issues (when already fixed text gets encoded again)
+        .replace(/Ã¤/g, 'ä')
+        .replace(/Ã¥/g, 'å')
+        .replace(/Ã¶/g, 'ö')
+        // Fix other common European characters
+        .replace(/Ã©/g, 'é')
+        .replace(/Ã¨/g, 'è')
+        .replace(/Ãª/g, 'ê')
+        .replace(/Ã«/g, 'ë')
+        .replace(/Ã¡/g, 'á')
+        .replace(/Ã /g, 'à')
+        .replace(/Ã¢/g, 'â')
+        .replace(/Ã£/g, 'ã')
+        .replace(/Ã§/g, 'ç')
+        .replace(/Ã­/g, 'í')
+        .replace(/Ã¬/g, 'ì')
+        .replace(/Ã®/g, 'î')
+        .replace(/Ã¯/g, 'ï')
+        .replace(/Ã³/g, 'ó')
+        .replace(/Ã²/g, 'ò')
+        .replace(/Ã´/g, 'ô')
+        .replace(/Ãµ/g, 'õ')
+        .replace(/Ãº/g, 'ú')
+        .replace(/Ã¹/g, 'ù')
+        .replace(/Ã»/g, 'û')
+        .replace(/Ã¼/g, 'ü')
+        .replace(/Ã½/g, 'ý')
+        .replace(/Ã¿/g, 'ÿ')
+        // Fix uppercase variants
+        .replace(/Ã‰/g, 'É')
+        .replace(/Ãˆ/g, 'È')
+        .replace(/ÃŠ/g, 'Ê')
+        .replace(/Ã‹/g, 'Ë')
+        .replace(/Ã€/g, 'À')
+        .replace(/Ã‚/g, 'Â')
+        .replace(/Ãƒ/g, 'Ã')
+        .replace(/Ã‡/g, 'Ç')
+        .replace(/Ã/g, 'Í')
+        .replace(/ÃŒ/g, 'Ì')
+        .replace(/Ã/g, 'Î')
+        .replace(/Ã/g, 'Ï')
+        .replace(/Ã"/g, 'Ó')
+        .replace(/Ã'/g, 'Ò')
+        .replace(/Ã"/g, 'Ô')
+        .replace(/Ã•/g, 'Õ')
+        .replace(/Ãš/g, 'Ú')
+        .replace(/Ã™/g, 'Ù')
+        .replace(/Ã›/g, 'Û')
+        .replace(/Ã/g, 'Ü')
+        .replace(/Ã/g, 'Ý');
+    
+    return fixed;
+}
+
+// Helper function to normalize text for comparison (handles encoding issues and variations)
+function normalizeTextForMatching(text) {
+    if (!text || typeof text !== 'string') {
+        return '';
+    }
+    
+    // Normalize text: lowercase, trim, remove extra whitespace
+    let normalized = text.toLowerCase().trim().replace(/\s+/g, ' ');
+    
+    // Handle common encoding issues (e.g., Ã_r -> ä, dÃ¥ -> då)
+    // This helps match text even if encoding differs
+    normalized = normalized
+        .replace(/Ã_r/g, 'ä')
+        .replace(/Ã¥/g, 'å')
+        .replace(/Ã¶/g, 'ö')
+        .replace(/Ã„/g, 'ä')
+        .replace(/Ã„/g, 'ä')
+        .replace(/Ã–/g, 'ö')
+        .replace(/Ã°/g, 'å');
+    
+    // Remove punctuation for fuzzy matching
+    normalized = normalized.replace(/[^\wåäöÅÄÖ\s]/g, '');
+    
+    return normalized;
+}
+
+// Helper function to convert markdown to HTML
+function markdownToHtml(markdown) {
+    if (!markdown || typeof markdown !== 'string') {
+        return '';
+    }
+    
+    let html = markdown;
+    
+    // Store our generated HTML tags with placeholders
+    const htmlTags = [];
+    let tagIndex = 0;
+    
+    // Convert headers (lines starting with emoji followed by text) - do this first before escaping
+    html = html.replace(/^([📘📗📙📕📓]+)\s+(.+)$/gm, (match, emoji, text) => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: `<h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #fff;">${emoji} ${text}</h3>` });
+        return placeholder;
+    });
+    
+    // Convert checkmark emoji sections (✅ Examples:)
+    html = html.replace(/^✅\s+(.+)$/gm, (match, text) => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: `<div style="margin: 12px 0 8px 0; font-weight: 600; color: #4CAF50;">✅ ${text}</div>` });
+        return placeholder;
+    });
+    
+    // Convert bold text (**text**)
+    html = html.replace(/\*\*([^*]+)\*\*/g, (match, text) => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: `<strong>${text}</strong>` });
+        return placeholder;
+    });
+    
+    // Convert numbered lists (1. text)
+    html = html.replace(/^(\d+)\.\s+(.+)$/gm, (match, num, text) => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: `<div style="margin: 4px 0; padding-left: 8px;">${num}. ${text}</div>` });
+        return placeholder;
+    });
+    
+    // Convert line breaks to <br> (replace with placeholder first)
+    html = html.replace(/\n/g, () => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: '<br>' });
+        return placeholder;
+    });
+    
+    // Wrap quoted text in quotes style
+    html = html.replace(/"([^"]+)"/g, (match, text) => {
+        const placeholder = `__HTMLTAG_${tagIndex++}__`;
+        htmlTags.push({ placeholder, html: `<span style="font-style: italic; color: #ccc;">"${text}"</span>` });
+        return placeholder;
+    });
+    
+    // Escape HTML to prevent XSS (but preserve our placeholders)
+    html = html
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    
+    // Restore our HTML tags
+    htmlTags.forEach(({ placeholder, html: tagHtml }) => {
+        html = html.replace(placeholder, tagHtml);
+    });
+    
+    return html;
+}
+
+// Helper function to check if two texts match (with fuzzy matching)
+function textsMatch(text1, text2) {
+    if (!text1 || !text2) return false;
+    
+    const norm1 = normalizeTextForMatching(text1);
+    const norm2 = normalizeTextForMatching(text2);
+    
+    // Exact match
+    if (norm1 === norm2) return true;
+    
+    // One contains the other (for partial matches)
+    if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
+    
+    // Fuzzy match: check if words overlap significantly
+    const words1 = norm1.split(/\s+/).filter(w => w.length > 2);
+    const words2 = norm2.split(/\s+/).filter(w => w.length > 2);
+    
+    if (words1.length === 0 || words2.length === 0) return false;
+    
+    // If most words match, consider it a match
+    const matchingWords = words1.filter(w1 => words2.some(w2 => w1 === w2 || w1.includes(w2) || w2.includes(w1)));
+    const matchRatio = matchingWords.length / Math.max(words1.length, words2.length);
+    
+    return matchRatio >= 0.7; // 70% word overlap
 }
 
 // VTT Parser
@@ -135,11 +422,17 @@ function parseVTT(content) {
 
         // Check if line contains timestamp (--> pattern)
         if (line.includes('-->')) {
-            // Save previous cue if exists
-            if (currentCue && textBuffer.length > 0) {
-                currentCue.text = textBuffer.join(' ').trim();
-                if (currentCue.text) {
+            // Save previous cue if exists (only save if it has valid text)
+            if (currentCue) {
+                let cueText = textBuffer.join(' ').trim();
+                // Fix encoding issues in cue text
+                cueText = fixEncoding(cueText);
+                currentCue.text = cueText;
+                // Only save cue if it has valid text content
+                if (isValidSubtitleText(currentCue.text)) {
                     subtitles.push(currentCue);
+                } else if (currentCue.text) {
+                    console.log(`Filtered out cue with invalid text at timestamp ${currentCue.start}`);
                 }
             }
 
@@ -152,19 +445,31 @@ function parseVTT(content) {
             };
             textBuffer = [];
         } else if (currentCue && line) {
-            // Accumulate text lines
-            textBuffer.push(line);
+            // Fix encoding issues and then check if valid subtitle text
+            const fixedLine = fixEncoding(line);
+            if (isValidSubtitleText(fixedLine)) {
+                textBuffer.push(fixedLine);
+            } else {
+                console.log(`Filtered out invalid subtitle text: "${fixedLine.substring(0, 50)}..."`);
+            }
         }
     }
 
-    // Save last cue
-    if (currentCue && textBuffer.length > 0) {
-        currentCue.text = textBuffer.join(' ').trim();
-        if (currentCue.text) {
+    // Save last cue (only save if it has valid text)
+    if (currentCue) {
+        let cueText = textBuffer.join(' ').trim();
+        // Fix encoding issues in cue text
+        cueText = fixEncoding(cueText);
+        currentCue.text = cueText;
+        // Only save cue if it has valid text content
+        if (isValidSubtitleText(currentCue.text)) {
             subtitles.push(currentCue);
+        } else if (currentCue.text) {
+            console.log(`Filtered out cue with invalid text at timestamp ${currentCue.start}`);
         }
     }
 
+    console.log('parseVTT: Processed', lines.length, 'lines, created', subtitles.length, 'subtitle entries');
     return subtitles;
 }
 
@@ -184,10 +489,12 @@ function parseTXT(content) {
         const trimmedLine = line.trim();
         // Include non-empty lines
         if (trimmedLine) {
+            // Fix encoding issues before adding to subtitles
+            const fixedLine = fixEncoding(trimmedLine);
             subtitles.push({
                 start: '--:--:--',
                 end: '--:--:--',
-                text: trimmedLine
+                text: fixedLine
             });
         }
     });
@@ -345,16 +652,20 @@ async function handleFileSelect(file) {
                 console.error('FileReader error:', error);
                 reject(error);
             };
-            reader.readAsText(file);
+            // Explicitly specify UTF-8 encoding to prevent Swedish characters from being broken
+            reader.readAsText(file, 'UTF-8');
         });
+        
+        // Fix encoding issues before parsing (in case file was already corrupted)
+        const fixedContent = fixEncoding(content);
         
         // Detect file type and use appropriate parser (case-insensitive)
         const fileNameLower = file.name.toLowerCase();
         if (fileNameLower.endsWith('.vtt')) {
-            currentSubtitleData = parseVTT(content);
+            currentSubtitleData = parseVTT(fixedContent);
             console.log('Parsed VTT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
         } else if (fileNameLower.endsWith('.txt')) {
-            currentSubtitleData = parseTXT(content);
+            currentSubtitleData = parseTXT(fixedContent);
             console.log('Parsed TXT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
         } else {
             alert('Unsupported file type. Please upload a .vtt or .txt file.');
@@ -389,6 +700,272 @@ async function handleFileSelect(file) {
     }
 }
 
+// Helper function to format time in seconds to human-readable format
+function formatTimeRemaining(seconds) {
+    if (seconds < 60) {
+        return `~${Math.round(seconds)}s`;
+    } else if (seconds < 3600) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.round(seconds % 60);
+        if (secs === 0) {
+            return `~${minutes}m`;
+        }
+        return `~${minutes}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (minutes === 0) {
+            return `~${hours}h`;
+        }
+        return `~${hours}h ${minutes}m`;
+    }
+}
+
+// Process subtitle entries in batches to handle large files
+async function processSubtitleBatches(subtitleData) {
+    const BATCH_SIZE_ENTRIES = 300; // Reduced to prevent timeout - smaller batches process faster
+    const MAX_CHARS_PER_BATCH = 12000; // Reduced to prevent timeout - smaller prompts are faster
+    const batches = [];
+    const results = [];
+    
+    // Split into batches based on entry count and character count
+    let currentBatch = [];
+    let currentBatchChars = 0;
+    
+    for (let i = 0; i < subtitleData.length; i++) {
+        const entry = subtitleData[i];
+        const entryText = entry.text || '';
+        const entryChars = entryText.length;
+        
+        // Start new batch if:
+        // 1. Current batch has enough entries, OR
+        // 2. Adding this entry would exceed character limit
+        if (currentBatch.length >= BATCH_SIZE_ENTRIES || 
+            (currentBatchChars + entryChars > MAX_CHARS_PER_BATCH && currentBatch.length > 0)) {
+            batches.push([...currentBatch]);
+            currentBatch = [];
+            currentBatchChars = 0;
+        }
+        
+        currentBatch.push(entry);
+        currentBatchChars += entryChars;
+    }
+    
+    // Add final batch if it has entries
+    if (currentBatch.length > 0) {
+        batches.push(currentBatch);
+    }
+    
+    console.log(`Split ${subtitleData.length} entries into ${batches.length} batches`);
+    
+    // Time tracking for estimation
+    const batchTimes = [];
+    const startTime = Date.now();
+    
+    // Initial estimate: assume ~3-5 seconds per batch on average (conservative estimate for GPT-4o-mini)
+    const ESTIMATED_SECONDS_PER_BATCH = 4;
+    const initialEstimatedSeconds = batches.length * ESTIMATED_SECONDS_PER_BATCH;
+    
+    // Process each batch sequentially
+    let globalEntryIndex = 0;
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const batchNumber = batchIndex + 1;
+        const batchStartTime = Date.now();
+        
+        // Calculate estimated remaining time
+        let timeRemainingText = '';
+        if (batchIndex === 0) {
+            // First batch: use initial estimate
+            timeRemainingText = ` • ${formatTimeRemaining(initialEstimatedSeconds)} remaining`;
+        } else if (batchTimes.length > 0) {
+            // Calculate average time per batch based on completed batches
+            const avgTimePerBatch = batchTimes.reduce((sum, time) => sum + time, 0) / batchTimes.length;
+            const remainingBatches = batches.length - batchIndex;
+            const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
+            timeRemainingText = ` • ${formatTimeRemaining(estimatedSecondsRemaining)} remaining`;
+        }
+        
+        // Update button text to show progress and time estimate
+        analyzeBtn.textContent = `Analyzing... (Batch ${batchNumber}/${batches.length}${timeRemainingText})`;
+        
+        try {
+            // Format batch text with numbered entries (using global index)
+            const batchText = batch.map((cue, idx) => {
+                const entryNumber = globalEntryIndex + 1;
+                globalEntryIndex++;
+                return `${entryNumber}. ${cue.text}`;
+            }).join('\n');
+            
+            const batchPrompt = `Translate ALL ${batch.length} Swedish subtitle entries below. Return JSON with "translations" array containing exactly ${batch.length} entries.
+
+Format:
+{
+  "translations": [
+    {"swedish": "text", "literal": "translation", "natural": "natural translation (if different)"}
+  ],
+  "expressions": [
+    {"word": "word", "meaning": "meaning", "example": "example"}
+  ]
+}
+
+Entries:
+${batchText}`;
+            
+            const messages = [
+                {
+                    role: 'system',
+                    content: 'You are a Swedish-English translator. Translate ALL entries. Return JSON only.'
+                },
+                {
+                    role: 'user',
+                    content: batchPrompt
+                }
+            ];
+            
+            const content = await callOpenAI(messages);
+            
+            // Parse batch response
+            let batchData;
+            try {
+                const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+                if (jsonMatch) {
+                    batchData = JSON.parse(jsonMatch[1]);
+                } else {
+                    batchData = JSON.parse(content);
+                }
+                
+                // Fix encoding for all translations and expressions in batch
+                if (batchData.translations && Array.isArray(batchData.translations)) {
+                    batchData.translations = batchData.translations.map(t => fixTranslationEncoding(t));
+                }
+                if (batchData.expressions && Array.isArray(batchData.expressions)) {
+                    batchData.expressions = batchData.expressions.map(e => fixTranslationEncoding(e));
+                }
+            } catch (e) {
+                console.error(`Error parsing batch ${batchNumber}:`, e);
+                // Create empty batch data on parse error
+                batchData = {
+                    translations: [],
+                    expressions: []
+                };
+            }
+            
+            // Validate batch got all translations
+            const expectedTranslations = batch.length;
+            const receivedTranslations = batchData.translations ? batchData.translations.length : 0;
+            
+            if (receivedTranslations < expectedTranslations) {
+                console.warn(`Batch ${batchNumber}: Expected ${expectedTranslations} translations, got ${receivedTranslations}`);
+                // Try to translate missing entries
+                if (batchData.translations && receivedTranslations > 0) {
+                    const translatedSwedishTexts = batchData.translations.map(t => t.swedish).filter(Boolean);
+                    
+                    const missingEntries = batch.filter(cue => {
+                        const cueText = cue.text || '';
+                        if (!cueText.trim()) return false;
+                        
+                        // Check if this entry was translated using improved matching
+                        const wasTranslated = translatedSwedishTexts.some(translated => 
+                            textsMatch(translated, cueText)
+                        );
+                        return !wasTranslated;
+                    });
+                    
+                    if (missingEntries.length > 0) {
+                        console.log(`Batch ${batchNumber}: Attempting to translate ${missingEntries.length} missing entries...`);
+                        try {
+                            const missingText = missingEntries.map((cue, idx) => 
+                                `${receivedTranslations + idx + 1}. ${cue.text}`
+                            ).join('\n');
+                            
+                            const missingPrompt = `Translate ${missingEntries.length} Swedish entries. Return JSON array:
+[{"swedish":"text","literal":"translation","natural":"natural (if different)"}]
+
+Entries:
+${missingText}`;
+                            
+                            const missingContent = await callOpenAI([
+                                {
+                                    role: 'system',
+                                    content: 'Swedish-English translator. Translate ALL entries. Return JSON only.'
+                                },
+                                {
+                                    role: 'user',
+                                    content: missingPrompt
+                                }
+                            ]);
+                            
+                            try {
+                                const missingJsonMatch = missingContent.match(/```(?:json)?\s*(\[[\s\S]*\])\s*```/);
+                                const missingJson = missingJsonMatch ? missingJsonMatch[1] : missingContent;
+                                const missingTranslations = JSON.parse(missingJson);
+                                
+                                if (Array.isArray(missingTranslations) && missingTranslations.length > 0) {
+                                    // Fix encoding for all missing translations
+                                    const fixedMissing = missingTranslations.map(t => fixTranslationEncoding(t));
+                                    batchData.translations.push(...fixedMissing);
+                                    console.log(`Batch ${batchNumber}: Added ${missingTranslations.length} missing translations`);
+                                }
+                            } catch (parseError) {
+                                console.error(`Batch ${batchNumber}: Failed to parse missing translations:`, parseError);
+                            }
+                        } catch (missingError) {
+                            console.error(`Batch ${batchNumber}: Failed to get missing translations:`, missingError);
+                        }
+                    }
+                }
+                
+                // Only create placeholders for entries that truly don't have translations
+                const finalCount = batchData.translations ? batchData.translations.length : 0;
+                if (finalCount < expectedTranslations) {
+                    const translatedSwedishTexts = (batchData.translations || []).map(t => t.swedish).filter(Boolean);
+                    
+                    for (const cue of batch) {
+                        const cueText = cue.text || '';
+                        if (!cueText.trim()) continue;
+                        
+                        // Check if this entry was translated using improved matching
+                        const exists = translatedSwedishTexts.some(translated => 
+                            textsMatch(translated, cueText)
+                        );
+                        
+                        if (!exists && isValidSubtitleText(cueText)) {
+                            // Only create placeholder for valid subtitle text that truly wasn't translated
+                            if (!batchData.translations) {
+                                batchData.translations = [];
+                            }
+                            batchData.translations.push(fixTranslationEncoding({
+                                swedish: cue.text,
+                                literal: `[Translation needed: ${cue.text}]`,
+                                natural: null
+                            }));
+                        }
+                    }
+                }
+            }
+            
+            results.push(batchData);
+            // Record batch processing time
+            const batchEndTime = Date.now();
+            const batchDuration = batchEndTime - batchStartTime;
+            batchTimes.push(batchDuration);
+            
+            console.log(`Batch ${batchNumber}/${batches.length} complete: ${batchData.translations?.length || 0} translations (took ${(batchDuration / 1000).toFixed(1)}s)`);
+            
+        } catch (error) {
+            console.error(`Error processing batch ${batchNumber}:`, error);
+            // Continue with next batch even if this one fails
+            results.push({
+                translations: [],
+                expressions: []
+            });
+        }
+    }
+    
+    return results;
+}
+
     // Analyze button
     analyzeBtn.addEventListener('click', async () => {
         if (!currentSubtitleData || currentSubtitleData.length === 0) {
@@ -412,99 +989,46 @@ async function handleFileSelect(file) {
         analyzeBtn.textContent = 'Analyzing...';
 
         try {
-            // Combine all subtitle text
-            let subtitleText = currentSubtitleData.map(cue => cue.text).join('\n');
+            console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries...`);
             
-            // Add size limit to prevent extremely large API requests (especially for txt files)
-            const MAX_TEXT_LENGTH = 15000;
-            let wasTruncated = false;
+            // Process subtitles in batches to handle large files
+            const batchResults = await processSubtitleBatches(currentSubtitleData);
             
-            if (subtitleText.length > MAX_TEXT_LENGTH) {
-                subtitleText = subtitleText.substring(0, MAX_TEXT_LENGTH);
-                subtitleText += '\n\n[... file truncated due to size limit ...]';
-                wasTruncated = true;
-                console.warn(`File is very large (${currentSubtitleData.length} entries). Only first ${MAX_TEXT_LENGTH} characters will be analyzed.`);
-            }
+            // Combine all batch results
+            const analysisData = {
+                translations: [],
+                expressions: []
+            };
             
-            console.log(`Analyzing ${subtitleText.length} characters from ${currentSubtitleData.length} entries...`);
-
-            // Create analysis prompt
-            const analysisPrompt = `Analyze the following Swedish subtitle text and provide:
-
-1. English translations for each significant phrase or sentence. For each translation, provide:
-   - The Swedish text
-   - Literal English translation
-   - Natural English translation (only if significantly different from literal)
-
-2. Important expressions and words with their meanings and usage examples.
-
-${wasTruncated ? 'Note: This text was truncated due to length. Focus on analyzing the beginning portion.\n\n' : ''}Format the response as JSON with this structure:
-{
-  "translations": [
-    {
-      "swedish": "Swedish text here",
-      "literal": "Literal English translation",
-      "natural": "Natural English translation (if different)"
-    }
-  ],
-  "expressions": [
-    {
-      "word": "Swedish word/phrase",
-      "meaning": "English meaning",
-      "example": "Usage example"
-    }
-  ]
-}
-
-Swedish subtitle text:
-${subtitleText}`;
-
-            const messages = [
-                {
-                    role: 'system',
-                    content: 'You are a Swedish language tutor. Provide clear, accurate translations and explanations.'
-                },
-                {
-                    role: 'user',
-                    content: analysisPrompt
+            // Merge translations from all batches
+            batchResults.forEach(batch => {
+                if (batch.translations) {
+                    // Fix encoding for all translations before adding
+                    const fixedTranslations = batch.translations.map(t => fixTranslationEncoding(t));
+                    analysisData.translations.push(...fixedTranslations);
                 }
-            ];
-
-            const content = await callOpenAI(messages);
+                if (batch.expressions) {
+                    // Fix encoding for all expressions before adding
+                    const fixedExpressions = batch.expressions.map(e => fixTranslationEncoding(e));
+                    analysisData.expressions.push(...fixedExpressions);
+                }
+            });
             
-            // Try to parse JSON response
-            let analysisData;
-            try {
-                // Extract JSON from markdown code blocks if present
-                const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
-                if (jsonMatch) {
-                    analysisData = JSON.parse(jsonMatch[1]);
-                } else {
-                    analysisData = JSON.parse(content);
+            // Deduplicate expressions (keep unique by word)
+            const expressionsMap = new Map();
+            analysisData.expressions.forEach(expr => {
+                const key = expr.word?.toLowerCase() || '';
+                if (!expressionsMap.has(key) || !expressionsMap.get(key).meaning) {
+                    expressionsMap.set(key, expr);
                 }
-            } catch (e) {
-                // If JSON parsing fails, create a structured response from text
-                analysisData = {
-                    translations: [],
-                    expressions: []
-                };
-                
-                // Try to extract information from text response
-                const lines = content.split('\n');
-                let currentSection = null;
-                
-                for (const line of lines) {
-                    if (line.toLowerCase().includes('translation')) {
-                        currentSection = 'translations';
-                    } else if (line.toLowerCase().includes('expression') || line.toLowerCase().includes('word')) {
-                        currentSection = 'expressions';
-                    }
-                }
-                
-                // Store raw response as fallback
-                analysisData.rawResponse = content;
-            }
+            });
+            analysisData.expressions = Array.from(expressionsMap.values());
+            
+            console.log(`Analysis complete: ${analysisData.translations.length} translations, ${analysisData.expressions.length} expressions`);
 
+            // Reset pagination to first page for new analysis
+            currentPage = 1;
+            
             currentAnalysis = analysisData;
             displayAnalysis(analysisData);
             
@@ -531,7 +1055,26 @@ ${subtitleText}`;
             currentChatHistory = [
                 {
                     role: 'system',
-                    content: 'You are helping the user understand Swedish subtitles. The user has just analyzed a subtitle file.'
+                    content: `You are helping the user understand Swedish subtitles. The user has just analyzed a subtitle file.
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list.`
                 },
                 {
                     role: 'assistant',
@@ -612,7 +1155,15 @@ function displayAnalysis(data) {
         // Fallback: display raw response
         translationsContent.innerHTML = `<div class="translation-item"><pre style="white-space: pre-wrap; color: #ccc;">${data.rawResponse}</pre></div>`;
     } else if (data.translations && data.translations.length > 0) {
-        data.translations.forEach((trans, index) => {
+        // Calculate pagination
+        const totalTranslations = data.translations.length;
+        const totalPages = Math.ceil(totalTranslations / itemsPerPage);
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = Math.min(startIndex + itemsPerPage, totalTranslations);
+        const paginatedTranslations = data.translations.slice(startIndex, endIndex);
+        
+        // Display paginated translations
+        paginatedTranslations.forEach((trans, index) => {
             const item = document.createElement('div');
             item.className = 'translation-item';
             
@@ -628,23 +1179,63 @@ function displayAnalysis(data) {
                 html += `<div class="translation-timestamp"></div>`;
             }
             html += `<div class="translation-text-wrapper">`;
-            html += `<div class="swedish-text">${escapeHtml(trans.swedish)}</div>`;
+            html += `<div class="swedish-text">${escapeHtml(fixEncoding(trans.swedish))}</div>`;
             
             if (trans.literal) {
                 html += `<div class="translation-label">Literal Translation</div>`;
-                html += `<div class="translation-text">${escapeHtml(trans.literal)}</div>`;
+                html += `<div class="translation-text">${escapeHtml(fixEncoding(trans.literal))}</div>`;
             }
             
             if (trans.natural && trans.natural !== trans.literal) {
                 html += `<div class="translation-label">Natural Translation</div>`;
-                html += `<div class="translation-text">${escapeHtml(trans.natural)}</div>`;
+                html += `<div class="translation-text">${escapeHtml(fixEncoding(trans.natural))}</div>`;
             }
             html += `</div></div>`;
             
             item.innerHTML = html;
-            item.addEventListener('click', () => openStudyModal('translation', trans, index, timestamp));
+            // Use actual global index for study modal
+            const globalIndex = startIndex + index;
+            item.addEventListener('click', () => openStudyModal('translation', trans, globalIndex, timestamp));
             translationsContent.appendChild(item);
         });
+        
+        // Add pagination controls if there's more than one page
+        if (totalPages > 1) {
+            const paginationContainer = document.createElement('div');
+            paginationContainer.className = 'pagination-container';
+            paginationContainer.innerHTML = `
+                <button id="prevPageBtn" class="pagination-btn" ${currentPage === 1 ? 'disabled' : ''}>Previous</button>
+                <span class="pagination-info">Page ${currentPage} of ${totalPages}</span>
+                <button id="nextPageBtn" class="pagination-btn" ${currentPage === totalPages ? 'disabled' : ''}>Next</button>
+            `;
+            translationsContent.appendChild(paginationContainer);
+            
+            // Add event handlers for pagination buttons
+            const prevBtn = document.getElementById('prevPageBtn');
+            const nextBtn = document.getElementById('nextPageBtn');
+            
+            if (prevBtn) {
+                prevBtn.addEventListener('click', () => {
+                    if (currentPage > 1) {
+                        currentPage--;
+                        displayAnalysis(data);
+                        // Scroll to top of results
+                        translationsContent.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                });
+            }
+            
+            if (nextBtn) {
+                nextBtn.addEventListener('click', () => {
+                    if (currentPage < totalPages) {
+                        currentPage++;
+                        displayAnalysis(data);
+                        // Scroll to top of results
+                        translationsContent.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                });
+            }
+        }
     } else {
         translationsContent.innerHTML = '<p style="color: #666;">No translations found.</p>';
     }
@@ -675,16 +1266,16 @@ function openStudyModal(type, item, index, timestamp = null) {
             html += `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
         }
         
-        html += `<div class="swedish-text">${escapeHtml(item.swedish)}</div>`;
+        html += `<div class="swedish-text">${escapeHtml(fixEncoding(item.swedish))}</div>`;
         
         if (item.literal) {
             html += `<div class="translation-label">Literal Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(item.literal)}</div>`;
+            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
         }
         
         if (item.natural && item.natural !== item.literal) {
             html += `<div class="translation-label">Natural Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(item.natural)}</div>`;
+            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
         }
         
         studyItemContent.innerHTML = html;
@@ -705,13 +1296,13 @@ function openStudyModal(type, item, index, timestamp = null) {
                     exprDiv.className = 'study-expression-item';
                     
                     let exprHtml = `<div class="study-expression-header">`;
-                    exprHtml += `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+                    exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
                     exprHtml += `</div>`;
                     if (expr.meaning) {
-                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(expr.meaning)}</div>`;
+                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
                     }
                     if (expr.example) {
-                        exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(expr.example)}</div>`;
+                        exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
                     }
                     
                     exprDiv.innerHTML = exprHtml;
@@ -734,17 +1325,36 @@ function openStudyModal(type, item, index, timestamp = null) {
         currentStudyChatHistory = [
             {
                 role: 'system',
-                content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${item.swedish}". Literal translation: "${item.literal || 'N/A'}". ${item.natural && item.natural !== item.literal ? `Natural translation: "${item.natural}".` : ''} ${relatedExprsText ? `Related expressions in this phrase: ${relatedExprsText}.` : ''} Answer their questions about this phrase, grammar, usage, or related vocabulary.`
+                content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${item.swedish}". Literal translation: "${item.literal || 'N/A'}". ${item.natural && item.natural !== item.literal ? `Natural translation: "${item.natural}".` : ''} ${relatedExprsText ? `Related expressions in this phrase: ${relatedExprsText}.` : ''}
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this phrase, grammar, usage, or related vocabulary, always using this format.`
             }
         ];
     } else if (type === 'expression') {
         studyTitle.textContent = 'Study Expression';
-        let html = `<div class="expression-word">${escapeHtml(item.word)}</div>`;
+        let html = `<div class="expression-word">${escapeHtml(fixEncoding(item.word))}</div>`;
         if (item.meaning) {
-            html += `<div class="expression-meaning">${escapeHtml(item.meaning)}</div>`;
+            html += `<div class="expression-meaning">${escapeHtml(fixEncoding(item.meaning))}</div>`;
         }
         if (item.example) {
-            html += `<div style="margin-top: 12px; padding: 12px; background-color: #111; border-radius: 6px; color: #999; font-size: 14px;">Example: ${escapeHtml(item.example)}</div>`;
+            html += `<div style="margin-top: 12px; padding: 12px; background-color: #111; border-radius: 6px; color: #999; font-size: 14px;">Example: ${escapeHtml(fixEncoding(item.example))}</div>`;
         }
         
         studyItemContent.innerHTML = html;
@@ -756,7 +1366,26 @@ function openStudyModal(type, item, index, timestamp = null) {
         currentStudyChatHistory = [
             {
                 role: 'system',
-                content: `You are helping the user study Swedish. They are looking at this Swedish expression/word: "${item.word}". Meaning: "${item.meaning || 'N/A'}". ${item.example ? `Example: "${item.example}".` : ''} Answer their questions about this expression, its usage, grammar, synonyms, or related vocabulary.`
+                content: `You are helping the user study Swedish. They are looking at this Swedish expression/word: "${item.word}". Meaning: "${item.meaning || 'N/A'}". ${item.example ? `Example: "${item.example}".` : ''}
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this expression, its usage, grammar, synonyms, or related vocabulary, always using this format.`
             }
         ];
     }
@@ -874,7 +1503,26 @@ async function addExpressionFromChat(word, context = 'main') {
         const meaningResponse = await callOpenAI([
             {
                 role: 'system',
-                content: 'You are a Swedish language tutor. Provide clear, concise definitions.'
+                content: `You are a Swedish language tutor. 
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Provide clear, concise definitions.`
             },
             {
                 role: 'user',
@@ -888,13 +1536,11 @@ async function addExpressionFromChat(word, context = 'main') {
         }
         
         // Create expression object
-        const newExpression = {
+        const newExpression = fixTranslationEncoding({
             word: word,
             meaning: meaningResponse.trim(),
             example: ''
-        };
-        
-        // Add to current analysis expressions
+        });
         if (!currentAnalysis.expressions) {
             currentAnalysis.expressions = [];
         }
@@ -927,6 +1573,58 @@ async function addExpressionFromChat(word, context = 'main') {
     }
 }
 
+// Display study expressions (refresh study modal expressions)
+function displayStudyExpressions() {
+    // Check if DOM elements exist
+    if (!studyExpressionsContent || !studyExpressionsSection) {
+        console.error('Study expressions DOM elements not found');
+        return;
+    }
+    
+    if (!currentAnalysis) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
+    
+    studyExpressionsContent.innerHTML = '';
+    studyExpressionsSection.style.display = 'block'; // Always show section
+    
+    if (!currentAnalysis.expressions || currentAnalysis.expressions.length === 0) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
+    
+    // If we have a current study item (translation), show related expressions
+    // Otherwise, show all expressions (for example, when adding from chat)
+    let expressionsToShow = [];
+    
+    // Always show all expressions - don't filter by translation context
+    // This ensures newly added expressions are always visible
+    expressionsToShow = currentAnalysis.expressions;
+    
+    if (expressionsToShow.length > 0) {
+        expressionsToShow.forEach(expr => {
+            const exprDiv = document.createElement('div');
+            exprDiv.className = 'study-expression-item';
+            
+            let exprHtml = `<div class="study-expression-header">`;
+            exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+            exprHtml += `</div>`;
+            if (expr.meaning) {
+                exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
+            }
+            if (expr.example) {
+                exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
+            }
+            
+            exprDiv.innerHTML = exprHtml;
+            studyExpressionsContent.appendChild(exprDiv);
+        });
+    } else {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+    }
+}
+
 // Display expressions (refresh the expressions section)
 function displayExpressions() {
     // Check if DOM element exists
@@ -955,12 +1653,12 @@ function displayExpressions() {
             html += `<div class="expression-timestamp"></div>`;
         }
         html += `<div class="expression-text-wrapper">`;
-        html += `<span class="expression-word">${escapeHtml(expr.word)}</span>`;
+        html += `<span class="expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
         if (expr.meaning) {
-            html += `<span class="expression-meaning">${escapeHtml(expr.meaning)}</span>`;
+            html += `<span class="expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</span>`;
         }
         if (expr.example) {
-            html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(expr.example)}</div>`;
+            html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
         }
         html += `</div></div>`;
         
@@ -968,65 +1666,6 @@ function displayExpressions() {
         item.addEventListener('click', () => openStudyModal('expression', expr, index));
         expressionsContent.appendChild(item);
     });
-}
-
-// Display study expressions (refresh study modal expressions)
-function displayStudyExpressions() {
-    // Check if DOM elements exist
-    if (!studyExpressionsContent || !studyExpressionsSection) {
-        console.error('Study expressions DOM elements not found');
-        return;
-    }
-    
-    if (!currentAnalysis) {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        return;
-    }
-    
-    studyExpressionsContent.innerHTML = '';
-    studyExpressionsSection.style.display = 'block'; // Always show section
-    
-    if (!currentAnalysis.expressions || currentAnalysis.expressions.length === 0) {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        return;
-    }
-    
-    // If we have a current study item (translation), show related expressions
-    // Otherwise, show all expressions (for example, when adding from chat)
-    let expressionsToShow = [];
-    
-    if (currentStudyItem && currentStudyItem.type === 'translation') {
-        const swedishText = currentStudyItem.item.swedish.toLowerCase();
-        expressionsToShow = currentAnalysis.expressions.filter(expr => {
-            const word = expr.word.toLowerCase();
-            return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
-        });
-    } else {
-        // If no specific translation context, show all expressions
-        expressionsToShow = currentAnalysis.expressions;
-    }
-    
-    if (expressionsToShow.length > 0) {
-        expressionsToShow.forEach(expr => {
-            const exprDiv = document.createElement('div');
-            exprDiv.className = 'study-expression-item';
-            
-            let exprHtml = `<div class="study-expression-header">`;
-            exprHtml += `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
-            exprHtml += `</div>`;
-            if (expr.meaning) {
-                exprHtml += `<div class="study-expression-meaning">${escapeHtml(expr.meaning)}</div>`;
-            }
-            if (expr.example) {
-                exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(expr.example)}</div>`;
-            }
-            
-            exprDiv.innerHTML = exprHtml;
-            studyExpressionsContent.appendChild(exprDiv);
-        });
-    } else {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-    }
 }
 
 function addChatMessage(role, content, wordToSave = null) {
@@ -1041,7 +1680,7 @@ function addChatMessage(role, content, wordToSave = null) {
     
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    bubble.textContent = content;
+    bubble.innerHTML = markdownToHtml(content);
     
     bubbleContainer.appendChild(bubble);
     
@@ -1540,6 +2179,9 @@ async function reopenAnalysis(savedItem) {
     currentChatHistory = savedItem.chatHistory || [];
     currentSubtitleData = savedItem.subtitleData;
     
+    // Reset pagination to first page when reopening saved analysis
+    currentPage = 1;
+    
     fileName.textContent = savedItem.fileName;
     scriptName.textContent = savedItem.fileName;
     fileInfo.style.display = 'flex';
@@ -1708,7 +2350,7 @@ function showChatHistory(chatHistory) {
         
         const bubble = document.createElement('div');
         bubble.className = 'chat-history-bubble';
-        bubble.textContent = msg.content;
+        bubble.innerHTML = markdownToHtml(msg.content);
         
         messageDiv.appendChild(bubble);
         chatHistoryContent.appendChild(messageDiv);
@@ -1796,11 +2438,22 @@ async function sendStudyChatMessage() {
 }
 
 // Add expression from study chat
-async function addExpressionFromStudyChat(word) {
+async function addExpressionFromStudyChat(word, gptResponseContent = null) {
     if (!apiKey || !word) {
-        console.error('Missing API key or word');
+        console.error('Missing API key or word', { apiKey: !!apiKey, word });
+        alert('Missing API key or word. Please check your settings.');
         return;
     }
+    
+    // Clean and validate word
+    word = word.trim();
+    if (!word) {
+        console.error('Word is empty after trimming');
+        alert('Please enter a valid word.');
+        return;
+    }
+    
+    console.log('Adding expression:', word);
     
     try {
         // Initialize currentAnalysis if it doesn't exist
@@ -1811,55 +2464,215 @@ async function addExpressionFromStudyChat(word) {
             };
         }
         
-        // Ask GPT for the meaning
-        const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide a brief, clear definition.`;
-        const meaningResponse = await callOpenAI([
-            {
-                role: 'system',
-                content: 'You are a Swedish language tutor. Provide clear, concise definitions.'
-            },
-            {
-                role: 'user',
-                content: meaningPrompt
-            }
-        ]);
+        // If we have GPT response content, parse it to extract dictionary form and meanings
+        let dictionaryForm = word;
+        let meanings = [];
+        let wordType = null;
         
-        // Validate response
-        if (!meaningResponse || typeof meaningResponse !== 'string') {
-            throw new Error('Invalid response from API');
+        if (gptResponseContent) {
+            // Extract word type (Verb, Noun, etc.)
+            const typeMatch = gptResponseContent.match(/Swedish\s+(Verb|Noun|Adjective|Adverb|Phrase)/i);
+            if (typeMatch) {
+                wordType = typeMatch[1].toLowerCase();
+            }
+            
+            // Extract dictionary form for verbs
+            if (wordType === 'verb') {
+                // Look for "att [verb]" pattern in the response
+                const attPattern = /att\s+([\wåäöÅÄÖ]+)/i;
+                const attMatch = gptResponseContent.match(attPattern);
+                if (attMatch) {
+                    dictionaryForm = `att ${attMatch[1]}`;
+                } else {
+                    // Look for "the [form] form of the verb '[word]'" pattern
+                    // Example: "the imperative form of the verb 'titta'"
+                    const verbFormPattern = /(?:the\s+\w+\s+form\s+of\s+)?the\s+verb\s+["']([\wåäöÅÄÖ]+)["']/i;
+                    const verbFormMatch = gptResponseContent.match(verbFormPattern);
+                    if (verbFormMatch) {
+                        dictionaryForm = `att ${verbFormMatch[1].toLowerCase()}`;
+                    } else {
+                        // Look for "verb '[word]'" pattern - extract the infinitive form
+                        const verbPattern = /verb\s+["']([\wåäöÅÄÖ]+)["']/i;
+                        const verbMatch = gptResponseContent.match(verbPattern);
+                        if (verbMatch) {
+                            dictionaryForm = `att ${verbMatch[1].toLowerCase()}`;
+                        } else {
+                            // Default: add "att" prefix to the word
+                            dictionaryForm = `att ${word.toLowerCase()}`;
+                        }
+                    }
+                }
+            }
+            
+            // Extract English meanings from the response
+            // Look for patterns like "means 'to look' or 'to watch'" or "which means 'to look' or 'to watch'"
+            const meaningPatterns = [
+                /which\s+means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi,
+                /means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi,
+                /["']to\s+([^"']+)["'](?:\s+or\s+["']to\s+([^"']+)["'])?/gi
+            ];
+            
+            for (const pattern of meaningPatterns) {
+                const matches = [...gptResponseContent.matchAll(pattern)];
+                if (matches.length > 0) {
+                    for (const match of matches) {
+                        // Skip matches that are in quotes but are Swedish words (check for åäö)
+                        if (match[1] && match[1].trim() && !/[åäöÅÄÖ]/.test(match[1])) {
+                            const meaning = match[1].trim();
+                            // Make sure it starts with "to" for verbs or is a valid English meaning
+                            if (wordType === 'verb' && !meaning.startsWith('to ')) {
+                                meanings.push(`to ${meaning}`);
+                            } else {
+                                meanings.push(meaning);
+                            }
+                        }
+                        if (match[2] && match[2].trim() && !/[åäöÅÄÖ]/.test(match[2])) {
+                            const meaning = match[2].trim();
+                            if (wordType === 'verb' && !meaning.startsWith('to ')) {
+                                meanings.push(`to ${meaning}`);
+                            } else {
+                                meanings.push(meaning);
+                            }
+                        }
+                    }
+                    if (meanings.length > 0) break;
+                }
+            }
+            
+            // If still no meanings found, try extracting from the sentence structure
+            if (meanings.length === 0) {
+                // Look for "which means X" pattern more broadly
+                const broadMatch = gptResponseContent.match(/which\s+means\s+["']([^"']+)["']/i);
+                if (broadMatch && broadMatch[1]) {
+                    const meaning = broadMatch[1].trim();
+                    if (!/[åäöÅÄÖ]/.test(meaning)) {
+                        if (wordType === 'verb' && !meaning.startsWith('to ')) {
+                            meanings.push(`to ${meaning}`);
+                        } else {
+                            meanings.push(meaning);
+                        }
+                    }
+                }
+            }
         }
         
-        // Create expression object
-        const newExpression = {
-            word: word,
-            meaning: meaningResponse.trim(),
-            example: ''
-        };
+        // If no meanings extracted, ask GPT for the meaning
+        let meaningText = meanings.join(' or ');
+        if (!meaningText) {
+            const meaningPrompt = `What does the Swedish word "${dictionaryForm}" mean in English? Provide a brief, clear definition.`;
+            console.log('Calling OpenAI for meaning...');
+            const meaningResponse = await callOpenAI([
+                {
+                    role: 'system',
+                    content: `You are a Swedish language tutor. 
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Provide clear, concise definitions.`
+                },
+                {
+                    role: 'user',
+                    content: meaningPrompt
+                }
+            ]);
+            
+            // Validate response
+            if (!meaningResponse || typeof meaningResponse !== 'string') {
+                throw new Error('Invalid response from API');
+            }
+            
+            // Extract meanings from response
+            const meaningPatterns2 = [
+                /means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi,
+                /which\s+means\s+["']([^"']+)["'](?:\s+or\s+["']([^"']+)["'])?/gi
+            ];
+            
+            for (const pattern of meaningPatterns2) {
+                const matches = [...meaningResponse.matchAll(pattern)];
+                if (matches.length > 0) {
+                    for (const match of matches) {
+                        if (match[1] && match[1].trim()) {
+                            meanings.push(match[1].trim());
+                        }
+                        if (match[2] && match[2].trim()) {
+                            meanings.push(match[2].trim());
+                        }
+                    }
+                    if (meanings.length > 0) break;
+                }
+            }
+            
+            meaningText = meanings.length > 0 ? meanings.join(' or ') : meaningResponse.trim();
+        }
         
-        // Add to current analysis expressions
+        // Clean up dictionary form
+        dictionaryForm = dictionaryForm.trim();
+        
+        // Check if expression already exists (by dictionary form)
+        const existingExpr = currentAnalysis.expressions?.find(
+            expr => expr.word?.toLowerCase() === dictionaryForm.toLowerCase()
+        );
+        if (existingExpr) {
+            console.log('Expression already exists:', dictionaryForm);
+            addStudyChatMessage('assistant', `"${dictionaryForm}" is already in Important Expressions & Words.`, null);
+            return;
+        }
+        
+        console.log('Creating expression:', { dictionaryForm, meaningText });
+        
+        // Create expression object
+        const newExpression = fixTranslationEncoding({
+            word: dictionaryForm,
+            meaning: meaningText,
+            example: ''
+        });
+        
         if (!currentAnalysis.expressions) {
             currentAnalysis.expressions = [];
         }
+        
         currentAnalysis.expressions.push(newExpression);
+        console.log('Added expression to currentAnalysis:', newExpression);
+        console.log('Total expressions now:', currentAnalysis.expressions.length);
         
         // Update study modal expressions (show all expressions, including the new one)
         // Only call if DOM elements exist (study modal is open)
         if (studyExpressionsContent && studyExpressionsSection) {
+            console.log('Updating study expressions display...');
             displayStudyExpressions();
         }
         
         // Also update main expressions display if visible
         if (resultsSection && resultsSection.style.display !== 'none' && expressionsContent) {
+            console.log('Updating main expressions display...');
             displayExpressions();
         }
         
         // Show confirmation (no save button needed for confirmation messages)
-        addStudyChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`, null);
+        addStudyChatMessage('assistant', `Added "${dictionaryForm}" to Important Expressions & Words. Meaning: ${meaningText}`, null);
+        
+        console.log('Successfully added expression:', dictionaryForm);
         
     } catch (error) {
         console.error('Error adding expression:', error);
         console.error('Error details:', error.message, error.stack);
-        addStudyChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`, null);
+        alert(`Error adding "${word}": ${error.message}`);
+        addStudyChatMessage('assistant', `Sorry, I couldn't add "${word}". Error: ${error.message}`, null);
     }
 }
 
@@ -1875,7 +2688,7 @@ function addStudyChatMessage(role, content, wordToSave = null) {
     
     const bubble = document.createElement('div');
     bubble.className = 'study-message-bubble';
-    bubble.textContent = content;
+    bubble.innerHTML = markdownToHtml(content);
     
     bubbleContainer.appendChild(bubble);
     
@@ -1886,57 +2699,87 @@ function addStudyChatMessage(role, content, wordToSave = null) {
         saveBtn.textContent = 'add on the list +';
         saveBtn.title = 'Add words from this response to Important Expressions & Words';
         saveBtn.addEventListener('click', async () => {
-            // Extract Swedish words from the message content
-            // Try multiple patterns to find Swedish words
-            let word = null;
-            
-            // Pattern 1: Quoted words like "word" or 'word'
-            const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
-            const quotedMatches = [...content.matchAll(quotedPattern)];
-            if (quotedMatches.length > 0) {
-                word = quotedMatches[0][1].trim();
-            }
-            
-            // Pattern 2: Look for Swedish words with åäö characters
-            if (!word) {
-                const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
-                const swedishMatches = [...content.matchAll(swedishWordPattern)];
-                // Filter out common English words and look for Swedish-specific patterns
-                const swedishWords = swedishMatches
-                    .map(m => m[1])
-                    .filter(w => /[åäöÅÄÖ]/.test(w) || w.length > 3)
-                    .filter(w => !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should'].includes(w.toLowerCase()));
-                if (swedishWords.length > 0) {
-                    word = swedishWords[0].trim();
+            try {
+                // Extract Swedish words from the message content
+                // Try multiple patterns to find Swedish words
+                let word = null;
+                
+                // Pattern 1: Extract from markdown format "📘 Swedish [Type]: [Word]"
+                const markdownPattern = /Swedish\s+(?:Verb|Noun|Adjective|Adverb|Phrase|word|expression|phrase):\s*([^\n]+)/i;
+                const markdownMatch = content.match(markdownPattern);
+                if (markdownMatch) {
+                    word = markdownMatch[1].trim();
+                    // Clean up: remove any quotes or extra text after the word
+                    word = word.replace(/^["']|["']$/g, '').split(/[–\-\n]/)[0].trim();
                 }
-            }
-            
-            // Pattern 3: Look for "Swedish word: X" patterns
-            if (!word) {
-                const patternMatch = content.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.]+)/i);
-                if (patternMatch) {
-                    word = patternMatch[1].trim();
+                
+                // Pattern 2: Quoted words like "word" or 'word' (in the format "[Word]" is...)
+                if (!word) {
+                    const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
+                    const quotedMatches = [...content.matchAll(quotedPattern)];
+                    if (quotedMatches.length > 0) {
+                        // Find the first quoted word that looks like Swedish (has åäö or is longer than 3 chars)
+                        for (const match of quotedMatches) {
+                            const candidate = match[1].trim();
+                            if (/[åäöÅÄÖ]/.test(candidate) || (candidate.length > 3 && !/^(the|and|that|this|with|from|have|been|will|they|there|would|could|should)$/i.test(candidate))) {
+                                word = candidate;
+                                break;
+                            }
+                        }
+                    }
                 }
-            }
-            
-            // If still no word found, prompt user
-            if (!word) {
-                word = prompt('Enter the Swedish word/phrase to add:');
-                if (!word || !word.trim()) {
-                    return; // User cancelled
+                
+                // Pattern 3: Look for Swedish words with åäö characters
+                if (!word) {
+                    const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
+                    const swedishMatches = [...content.matchAll(swedishWordPattern)];
+                    // Filter out common English words and look for Swedish-specific patterns
+                    const swedishWords = swedishMatches
+                        .map(m => m[1])
+                        .filter(w => /[åäöÅÄÖ]/.test(w) || w.length > 3)
+                        .filter(w => !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should'].includes(w.toLowerCase()));
+                    if (swedishWords.length > 0) {
+                        word = swedishWords[0].trim();
+                    }
                 }
-                word = word.trim();
+                
+                // Pattern 4: Look for "Swedish word: X" patterns
+                if (!word) {
+                    const patternMatch = content.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.\n]+)/i);
+                    if (patternMatch) {
+                        word = patternMatch[1].trim();
+                    }
+                }
+                
+                // If still no word found, prompt user
+                if (!word) {
+                    word = prompt('Enter the Swedish word/phrase to add:');
+                    if (!word || !word.trim()) {
+                        return; // User cancelled
+                    }
+                    word = word.trim();
+                }
+                
+                // Add the word
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'saving...';
+                
+                // Pass the full content to extract dictionary form and meanings
+                await addExpressionFromStudyChat(word, content);
+                
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'added ✓';
+                setTimeout(() => {
+                    saveBtn.textContent = 'add on the list +';
+                }, 2000);
+            } catch (error) {
+                console.error('Error in save button click handler:', error);
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'error, try again';
+                setTimeout(() => {
+                    saveBtn.textContent = 'add on the list +';
+                }, 2000);
             }
-            
-            // Add the word
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'saving...';
-            await addExpressionFromStudyChat(word);
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'added ✓';
-            setTimeout(() => {
-                saveBtn.textContent = 'add on the list +';
-            }, 2000);
         });
         bubbleContainer.appendChild(saveBtn);
     }

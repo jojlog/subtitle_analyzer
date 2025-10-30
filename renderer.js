@@ -1092,60 +1092,6 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         }
     });
 
-// Helper function to find timestamp for Swedish text
-function findTimestampForText(swedishText) {
-    if (!currentSubtitleData || !swedishText) return null;
-    
-    const searchText = swedishText.toLowerCase().trim();
-    
-    // First try exact match
-    for (const cue of currentSubtitleData) {
-        if (cue.text && cue.text.toLowerCase().trim() === searchText) {
-            return { start: cue.start, end: cue.end };
-        }
-    }
-    
-    // Then try partial match (text contains search or search contains text)
-    for (const cue of currentSubtitleData) {
-        if (cue.text) {
-            const cueText = cue.text.toLowerCase();
-            if (cueText.includes(searchText) || searchText.includes(cueText)) {
-                return { start: cue.start, end: cue.end };
-            }
-        }
-    }
-    
-    // For expressions/words, try word-by-word matching
-    const searchWords = searchText.split(/\s+/).filter(w => w.length > 2);
-    if (searchWords.length > 0) {
-        for (const cue of currentSubtitleData) {
-            if (cue.text) {
-                const cueText = cue.text.toLowerCase();
-                const matches = searchWords.filter(word => cueText.includes(word));
-                if (matches.length > 0) {
-                    return { start: cue.start, end: cue.end };
-                }
-            }
-        }
-    }
-    
-    return null;
-}
-
-// Format timestamp for display
-function formatTimestamp(timestamp) {
-    if (!timestamp) return '--:--:--';
-    
-    const timestampStr = timestamp.start || '';
-    // If timestamp is empty or is the placeholder, return formatted placeholder
-    if (!timestampStr || timestampStr === '--:--:--') {
-        return '--:--:--';
-    }
-    
-    // VTT format is usually HH:MM:SS.mmm or MM:SS.mmm
-    return timestampStr;
-}
-
 // Display analysis results
 function displayAnalysis(data) {
     // Display translations
@@ -1245,164 +1191,6 @@ function displayAnalysis(data) {
     if (expressionsContent && expressionsContent.parentElement) {
         expressionsContent.parentElement.style.display = 'none';
     }
-}
-
-// Open study modal with selected item
-function openStudyModal(type, item, index, timestamp = null) {
-    currentStudyItem = { type, item, index, timestamp };
-    currentStudyChatHistory = [];
-    
-    // Display the item
-    studyItemContent.innerHTML = '';
-    studyExpressionsContent.innerHTML = '';
-    studyExpressionsSection.style.display = 'block'; // Always show the section
-    
-    if (type === 'translation') {
-        studyTitle.textContent = 'Study Translation';
-        let html = '';
-        
-        // Display timestamp at the top
-        if (timestamp && timestamp.start) {
-            html += `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
-        }
-        
-        html += `<div class="swedish-text">${escapeHtml(fixEncoding(item.swedish))}</div>`;
-        
-        if (item.literal) {
-            html += `<div class="translation-label">Literal Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
-        }
-        
-        if (item.natural && item.natural !== item.literal) {
-            html += `<div class="translation-label">Natural Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
-        }
-        
-        studyItemContent.innerHTML = html;
-        
-        // Find and display related expressions/words
-        let relatedExpressions = [];
-        if (currentAnalysis && currentAnalysis.expressions && currentAnalysis.expressions.length > 0) {
-            const swedishText = item.swedish.toLowerCase();
-            relatedExpressions = currentAnalysis.expressions.filter(expr => {
-                const word = expr.word.toLowerCase();
-                // Check if the expression word appears in the Swedish text
-                return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
-            });
-            
-            if (relatedExpressions.length > 0) {
-                relatedExpressions.forEach(expr => {
-                    const exprDiv = document.createElement('div');
-                    exprDiv.className = 'study-expression-item';
-                    
-                    let exprHtml = `<div class="study-expression-header">`;
-                    exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
-                    exprHtml += `</div>`;
-                    if (expr.meaning) {
-                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
-                    }
-                    if (expr.example) {
-                        exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
-                    }
-                    
-                    exprDiv.innerHTML = exprHtml;
-                    studyExpressionsContent.appendChild(exprDiv);
-                });
-            } else {
-                // Show empty state message
-                studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-            }
-        } else {
-            // Show empty state message
-            studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        }
-        
-        // Initialize chat with context
-        const relatedExprsText = relatedExpressions.length > 0
-            ? relatedExpressions.map(expr => `${expr.word}: ${expr.meaning || 'N/A'}`).join('; ')
-            : '';
-        
-        currentStudyChatHistory = [
-            {
-                role: 'system',
-                content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${item.swedish}". Literal translation: "${item.literal || 'N/A'}". ${item.natural && item.natural !== item.literal ? `Natural translation: "${item.natural}".` : ''} ${relatedExprsText ? `Related expressions in this phrase: ${relatedExprsText}.` : ''}
-
-CRITICAL: Always format your responses using this EXACT markdown structure:
-
-📘 Swedish [Type]: [Word]
-(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
-
-"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
-
-[Context explanation paragraph about how it's used.]
-
-✅ Examples:
-
-	1.	[Swedish example sentence] – [English translation]
-
-	2.	[Swedish example sentence] – [English translation]
-
-	3.	[Swedish example sentence] – [English translation]
-
-You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this phrase, grammar, usage, or related vocabulary, always using this format.`
-            }
-        ];
-    } else if (type === 'expression') {
-        studyTitle.textContent = 'Study Expression';
-        let html = `<div class="expression-word">${escapeHtml(fixEncoding(item.word))}</div>`;
-        if (item.meaning) {
-            html += `<div class="expression-meaning">${escapeHtml(fixEncoding(item.meaning))}</div>`;
-        }
-        if (item.example) {
-            html += `<div style="margin-top: 12px; padding: 12px; background-color: #111; border-radius: 6px; color: #999; font-size: 14px;">Example: ${escapeHtml(fixEncoding(item.example))}</div>`;
-        }
-        
-        studyItemContent.innerHTML = html;
-        
-        // Show empty expressions section for expression type too
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        
-        // Initialize chat with context
-        currentStudyChatHistory = [
-            {
-                role: 'system',
-                content: `You are helping the user study Swedish. They are looking at this Swedish expression/word: "${item.word}". Meaning: "${item.meaning || 'N/A'}". ${item.example ? `Example: "${item.example}".` : ''}
-
-CRITICAL: Always format your responses using this EXACT markdown structure:
-
-📘 Swedish [Type]: [Word]
-(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
-
-"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
-
-[Context explanation paragraph about how it's used.]
-
-✅ Examples:
-
-	1.	[Swedish example sentence] – [English translation]
-
-	2.	[Swedish example sentence] – [English translation]
-
-	3.	[Swedish example sentence] – [English translation]
-
-You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this expression, its usage, grammar, synonyms, or related vocabulary, always using this format.`
-            }
-        ];
-    }
-    
-    // Clear chat messages
-    studyChatMessages.innerHTML = '';
-    studyChatInput.value = '';
-    
-    // Show modal
-    studyModal.style.display = 'flex';
-}
-
-// Close study modal
-function closeStudyModal() {
-    studyModal.style.display = 'none';
-    currentStudyItem = null;
-    currentStudyChatHistory = [];
 }
 
     // Chat functionality
@@ -1571,101 +1359,6 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         console.error('Error details:', error.message, error.stack);
         addChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`, null);
     }
-}
-
-// Display study expressions (refresh study modal expressions)
-function displayStudyExpressions() {
-    // Check if DOM elements exist
-    if (!studyExpressionsContent || !studyExpressionsSection) {
-        console.error('Study expressions DOM elements not found');
-        return;
-    }
-    
-    if (!currentAnalysis) {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        return;
-    }
-    
-    studyExpressionsContent.innerHTML = '';
-    studyExpressionsSection.style.display = 'block'; // Always show section
-    
-    if (!currentAnalysis.expressions || currentAnalysis.expressions.length === 0) {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-        return;
-    }
-    
-    // If we have a current study item (translation), show related expressions
-    // Otherwise, show all expressions (for example, when adding from chat)
-    let expressionsToShow = [];
-    
-    // Always show all expressions - don't filter by translation context
-    // This ensures newly added expressions are always visible
-    expressionsToShow = currentAnalysis.expressions;
-    
-    if (expressionsToShow.length > 0) {
-        expressionsToShow.forEach(expr => {
-            const exprDiv = document.createElement('div');
-            exprDiv.className = 'study-expression-item';
-            
-            let exprHtml = `<div class="study-expression-header">`;
-            exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
-            exprHtml += `</div>`;
-            if (expr.meaning) {
-                exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
-            }
-            if (expr.example) {
-                exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
-            }
-            
-            exprDiv.innerHTML = exprHtml;
-            studyExpressionsContent.appendChild(exprDiv);
-        });
-    } else {
-        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
-    }
-}
-
-// Display expressions (refresh the expressions section)
-function displayExpressions() {
-    // Check if DOM element exists
-    if (!expressionsContent) {
-        console.error('Expressions content DOM element not found');
-        return;
-    }
-    
-    if (!currentAnalysis || !currentAnalysis.expressions) return;
-    
-    expressionsContent.innerHTML = '';
-    
-    currentAnalysis.expressions.forEach((expr, index) => {
-        const item = document.createElement('div');
-        item.className = 'expression-item';
-        
-        // Find timestamp for expression if it appears in subtitle text
-        const timestamp = findTimestampForText(expr.word);
-        const timestampStr = timestamp ? formatTimestamp(timestamp) : '';
-        
-        let html = `<div class="expression-item-content">`;
-        if (timestampStr) {
-            html += `<div class="expression-timestamp">${escapeHtml(timestampStr)}</div>`;
-        } else {
-            // Always show timestamp column, even if empty
-            html += `<div class="expression-timestamp"></div>`;
-        }
-        html += `<div class="expression-text-wrapper">`;
-        html += `<span class="expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
-        if (expr.meaning) {
-            html += `<span class="expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</span>`;
-        }
-        if (expr.example) {
-            html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
-        }
-        html += `</div></div>`;
-        
-        item.innerHTML = html;
-        item.addEventListener('click', () => openStudyModal('expression', expr, index));
-        expressionsContent.appendChild(item);
-    });
 }
 
 function addChatMessage(role, content, wordToSave = null) {
@@ -2331,6 +2024,313 @@ async function reopenAnalysis(savedItem) {
         }
     });
 }); // End of DOMContentLoaded
+
+// Helper function to find timestamp for Swedish text
+function findTimestampForText(swedishText) {
+    if (!currentSubtitleData || !swedishText) return null;
+    
+    const searchText = swedishText.toLowerCase().trim();
+    
+    // First try exact match
+    for (const cue of currentSubtitleData) {
+        if (cue.text && cue.text.toLowerCase().trim() === searchText) {
+            return { start: cue.start, end: cue.end };
+        }
+    }
+    
+    // Then try partial match (text contains search or search contains text)
+    for (const cue of currentSubtitleData) {
+        if (cue.text) {
+            const cueText = cue.text.toLowerCase();
+            if (cueText.includes(searchText) || searchText.includes(cueText)) {
+                return { start: cue.start, end: cue.end };
+            }
+        }
+    }
+    
+    // For expressions/words, try word-by-word matching
+    const searchWords = searchText.split(/\s+/).filter(w => w.length > 2);
+    if (searchWords.length > 0) {
+        for (const cue of currentSubtitleData) {
+            if (cue.text) {
+                const cueText = cue.text.toLowerCase();
+                const matches = searchWords.filter(word => cueText.includes(word));
+                if (matches.length > 0) {
+                    return { start: cue.start, end: cue.end };
+                }
+            }
+        }
+    }
+    
+    return null;
+}
+
+// Format timestamp for display
+function formatTimestamp(timestamp) {
+    if (!timestamp) return '--:--:--';
+    
+    const timestampStr = timestamp.start || '';
+    // If timestamp is empty or is the placeholder, return formatted placeholder
+    if (!timestampStr || timestampStr === '--:--:--') {
+        return '--:--:--';
+    }
+    
+    // VTT format is usually HH:MM:SS.mmm or MM:SS.mmm
+    return timestampStr;
+}
+
+// Open study modal with selected item
+function openStudyModal(type, item, index, timestamp = null) {
+    currentStudyItem = { type, item, index, timestamp };
+    currentStudyChatHistory = [];
+    
+    // Display the item
+    studyItemContent.innerHTML = '';
+    studyExpressionsContent.innerHTML = '';
+    studyExpressionsSection.style.display = 'block'; // Always show the section
+    
+    if (type === 'translation') {
+        studyTitle.textContent = 'Study Translation';
+        let html = '';
+        
+        // Display timestamp at the top
+        if (timestamp && timestamp.start) {
+            html += `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
+        }
+        
+        html += `<div class="swedish-text">${escapeHtml(fixEncoding(item.swedish))}</div>`;
+        
+        if (item.literal) {
+            html += `<div class="translation-label">Literal Translation</div>`;
+            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
+        }
+        
+        if (item.natural && item.natural !== item.literal) {
+            html += `<div class="translation-label">Natural Translation</div>`;
+            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
+        }
+        
+        studyItemContent.innerHTML = html;
+        
+        // Find and display related expressions/words
+        let relatedExpressions = [];
+        if (currentAnalysis && currentAnalysis.expressions && currentAnalysis.expressions.length > 0) {
+            const swedishText = item.swedish.toLowerCase();
+            relatedExpressions = currentAnalysis.expressions.filter(expr => {
+                const word = expr.word.toLowerCase();
+                // Check if the expression word appears in the Swedish text
+                return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
+            });
+            
+            if (relatedExpressions.length > 0) {
+                relatedExpressions.forEach(expr => {
+                    const exprDiv = document.createElement('div');
+                    exprDiv.className = 'study-expression-item';
+                    
+                    let exprHtml = `<div class="study-expression-header">`;
+                    exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+                    exprHtml += `</div>`;
+                    if (expr.meaning) {
+                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
+                    }
+                    if (expr.example) {
+                        exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
+                    }
+                    
+                    exprDiv.innerHTML = exprHtml;
+                    studyExpressionsContent.appendChild(exprDiv);
+                });
+            } else {
+                // Show empty state message
+                studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+            }
+        } else {
+            // Show empty state message
+            studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        }
+        
+        // Initialize chat with context
+        const relatedExprsText = relatedExpressions.length > 0
+            ? relatedExpressions.map(expr => `${expr.word}: ${expr.meaning || 'N/A'}`).join('; ')
+            : '';
+        
+        currentStudyChatHistory = [
+            {
+                role: 'system',
+                content: `You are helping the user study Swedish. They are looking at this Swedish phrase: "${item.swedish}". Literal translation: "${item.literal || 'N/A'}". ${item.natural && item.natural !== item.literal ? `Natural translation: "${item.natural}".` : ''} ${relatedExprsText ? `Related expressions in this phrase: ${relatedExprsText}.` : ''}
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this phrase, grammar, usage, or related vocabulary, always using this format.`
+            }
+        ];
+    } else if (type === 'expression') {
+        studyTitle.textContent = 'Study Expression';
+        let html = `<div class="expression-word">${escapeHtml(fixEncoding(item.word))}</div>`;
+        if (item.meaning) {
+            html += `<div class="expression-meaning">${escapeHtml(fixEncoding(item.meaning))}</div>`;
+        }
+        if (item.example) {
+            html += `<div style="margin-top: 12px; padding: 12px; background-color: #111; border-radius: 6px; color: #999; font-size: 14px;">Example: ${escapeHtml(fixEncoding(item.example))}</div>`;
+        }
+        
+        studyItemContent.innerHTML = html;
+        
+        // Show empty expressions section for expression type too
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        
+        // Initialize chat with context
+        currentStudyChatHistory = [
+            {
+                role: 'system',
+                content: `You are helping the user study Swedish. They are looking at this Swedish expression/word: "${item.word}". Meaning: "${item.meaning || 'N/A'}". ${item.example ? `Example: "${item.example}".` : ''}
+
+CRITICAL: Always format your responses using this EXACT markdown structure:
+
+📘 Swedish [Type]: [Word]
+(Use appropriate emoji: 📘 for Verb, 📗 for Noun, 📙 for Adjective, 📕 for Adverb, 📓 for Phrase)
+
+"[Word]" is [brief description of form/usage], which means "[English meaning]" in Swedish.
+
+[Context explanation paragraph about how it's used.]
+
+✅ Examples:
+
+	1.	[Swedish example sentence] – [English translation]
+
+	2.	[Swedish example sentence] – [English translation]
+
+	3.	[Swedish example sentence] – [English translation]
+
+You MUST use this exact format for ALL responses. Use tab indentation for the numbered examples list. Answer their questions about this expression, its usage, grammar, synonyms, or related vocabulary, always using this format.`
+            }
+        ];
+    }
+    
+    // Clear chat messages
+    studyChatMessages.innerHTML = '';
+    studyChatInput.value = '';
+    
+    // Show modal
+    studyModal.style.display = 'flex';
+}
+
+// Close study modal
+function closeStudyModal() {
+    studyModal.style.display = 'none';
+    currentStudyItem = null;
+    currentStudyChatHistory = [];
+}
+
+// Display study expressions (refresh study modal expressions)
+function displayStudyExpressions() {
+    // Check if DOM elements exist
+    if (!studyExpressionsContent || !studyExpressionsSection) {
+        console.error('Study expressions DOM elements not found');
+        return;
+    }
+    
+    if (!currentAnalysis) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
+    
+    studyExpressionsContent.innerHTML = '';
+    studyExpressionsSection.style.display = 'block'; // Always show section
+    
+    if (!currentAnalysis.expressions || currentAnalysis.expressions.length === 0) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
+    
+    // If we have a current study item (translation), show related expressions
+    // Otherwise, show all expressions (for example, when adding from chat)
+    let expressionsToShow = [];
+    
+    // Always show all expressions - don't filter by translation context
+    // This ensures newly added expressions are always visible
+    expressionsToShow = currentAnalysis.expressions;
+    
+    if (expressionsToShow.length > 0) {
+        expressionsToShow.forEach(expr => {
+            const exprDiv = document.createElement('div');
+            exprDiv.className = 'study-expression-item';
+            
+            let exprHtml = `<div class="study-expression-header">`;
+            exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+            exprHtml += `</div>`;
+            if (expr.meaning) {
+                exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
+            }
+            if (expr.example) {
+                exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
+            }
+            
+            exprDiv.innerHTML = exprHtml;
+            studyExpressionsContent.appendChild(exprDiv);
+        });
+    } else {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+    }
+}
+
+// Display expressions (refresh the expressions section)
+function displayExpressions() {
+    // Check if DOM element exists
+    if (!expressionsContent) {
+        console.error('Expressions content DOM element not found');
+        return;
+    }
+    
+    if (!currentAnalysis || !currentAnalysis.expressions) return;
+    
+    expressionsContent.innerHTML = '';
+    
+    currentAnalysis.expressions.forEach((expr, index) => {
+        const item = document.createElement('div');
+        item.className = 'expression-item';
+        
+        // Find timestamp for expression if it appears in subtitle text
+        const timestamp = findTimestampForText(expr.word);
+        const timestampStr = timestamp ? formatTimestamp(timestamp) : '';
+        
+        let html = `<div class="expression-item-content">`;
+        if (timestampStr) {
+            html += `<div class="expression-timestamp">${escapeHtml(timestampStr)}</div>`;
+        } else {
+            // Always show timestamp column, even if empty
+            html += `<div class="expression-timestamp"></div>`;
+        }
+        html += `<div class="expression-text-wrapper">`;
+        html += `<span class="expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+        if (expr.meaning) {
+            html += `<span class="expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</span>`;
+        }
+        if (expr.example) {
+            html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
+        }
+        html += `</div></div>`;
+        
+        item.innerHTML = html;
+        item.addEventListener('click', () => openStudyModal('expression', expr, index));
+        expressionsContent.appendChild(item);
+    });
+}
 
 // Show chat history
 function showChatHistory(chatHistory) {

@@ -384,8 +384,21 @@ body.theme-purple {
 .saved-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     margin-bottom: 24px;
+}
+
+.saved-header-title-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.saved-header-hint {
+    font-size: 14px;
+    color: var(--text-tertiary);
+    margin: 0;
+    font-weight: normal;
 }
 
 .saved-header-buttons {
@@ -497,6 +510,55 @@ body.theme-purple {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
+}
+
+.saved-item-rename-section {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.saved-item-rename-btn {
+    background-color: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 14px;
+    transition: color 0.2s;
+    position: relative;
+    z-index: 10;
+    text-align: left;
+    font-weight: normal;
+}
+
+.saved-item-rename-btn:hover {
+    color: var(--text-primary);
+}
+
+.saved-item-rename-input {
+    flex: 1;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: inherit;
+    width: 100%;
+    cursor: text;
+}
+
+.saved-item-rename-input::placeholder {
+    color: #666;
+}
+
+.saved-item-rename-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    color: var(--text-primary);
 }
 
 .saved-item-name {

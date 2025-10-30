@@ -10,7 +10,8 @@ let translationsContent, expressionsContent, chatSection, chatMessages, chatInpu
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, closeSavedBtn;
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn;
 let homeBtn;
-let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn;
+let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn;
+let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
 
 // Study modal state
 let currentStudyItem = null;
@@ -156,6 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
     studyChatInput = document.getElementById('studyChatInput');
     studyChatSendBtn = document.getElementById('studyChatSendBtn');
     closeStudyBtn = document.getElementById('closeStudyBtn');
+    studyHistoryBtn = document.getElementById('studyHistoryBtn');
+    chatHistoryModal = document.getElementById('chatHistoryModal');
+    chatHistoryContent = document.getElementById('chatHistoryContent');
+    closeHistoryBtn = document.getElementById('closeHistoryBtn');
 
     console.log('DOM elements initialized', {
         uploadArea: !!uploadArea,
@@ -367,6 +372,26 @@ ${subtitleText}`;
         }
     });
 
+// Helper function to find timestamp for Swedish text
+function findTimestampForText(swedishText) {
+    if (!currentSubtitleData) return null;
+    
+    const searchText = swedishText.toLowerCase().trim();
+    for (const cue of currentSubtitleData) {
+        if (cue.text && cue.text.toLowerCase().includes(searchText) || searchText.includes(cue.text.toLowerCase())) {
+            return { start: cue.start, end: cue.end };
+        }
+    }
+    return null;
+}
+
+// Format timestamp for display
+function formatTimestamp(timestamp) {
+    if (!timestamp) return '';
+    // VTT format is usually HH:MM:SS.mmm or MM:SS.mmm
+    return timestamp.start || '';
+}
+
 // Display analysis results
 function displayAnalysis(data) {
     // Display translations
@@ -380,7 +405,16 @@ function displayAnalysis(data) {
             const item = document.createElement('div');
             item.className = 'translation-item';
             
-            let html = `<div class="swedish-text">${escapeHtml(trans.swedish)}</div>`;
+            // Find timestamp for this translation
+            const timestamp = findTimestampForText(trans.swedish);
+            const timestampStr = timestamp ? formatTimestamp(timestamp) : '';
+            
+            let html = `<div class="translation-item-content">`;
+            if (timestampStr) {
+                html += `<div class="translation-timestamp">${escapeHtml(timestampStr)}</div>`;
+            }
+            html += `<div class="translation-text-wrapper">`;
+            html += `<div class="swedish-text">${escapeHtml(trans.swedish)}</div>`;
             
             if (trans.literal) {
                 html += `<div class="translation-label">Literal Translation</div>`;
@@ -391,43 +425,27 @@ function displayAnalysis(data) {
                 html += `<div class="translation-label">Natural Translation</div>`;
                 html += `<div class="translation-text">${escapeHtml(trans.natural)}</div>`;
             }
+            html += `</div></div>`;
             
             item.innerHTML = html;
-            item.addEventListener('click', () => openStudyModal('translation', trans, index));
+            item.addEventListener('click', () => openStudyModal('translation', trans, index, timestamp));
             translationsContent.appendChild(item);
         });
     } else {
         translationsContent.innerHTML = '<p style="color: #666;">No translations found.</p>';
     }
 
-    // Display expressions
-    expressionsContent.innerHTML = '';
-    
+    // Display expressions using helper function
     if (data.expressions && data.expressions.length > 0) {
-        data.expressions.forEach((expr, index) => {
-            const item = document.createElement('div');
-            item.className = 'expression-item';
-            
-            let html = `<span class="expression-word">${escapeHtml(expr.word)}</span>`;
-            if (expr.meaning) {
-                html += `<span class="expression-meaning">${escapeHtml(expr.meaning)}</span>`;
-            }
-            if (expr.example) {
-                html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(expr.example)}</div>`;
-            }
-            
-            item.innerHTML = html;
-            item.addEventListener('click', () => openStudyModal('expression', expr, index));
-            expressionsContent.appendChild(item);
-        });
+        displayExpressions();
     } else {
         expressionsContent.innerHTML = '<p style="color: #666;">No expressions found.</p>';
     }
 }
 
 // Open study modal with selected item
-function openStudyModal(type, item, index) {
-    currentStudyItem = { type, item, index };
+function openStudyModal(type, item, index, timestamp = null) {
+    currentStudyItem = { type, item, index, timestamp };
     currentStudyChatHistory = [];
     
     // Display the item
@@ -437,7 +455,14 @@ function openStudyModal(type, item, index) {
     
     if (type === 'translation') {
         studyTitle.textContent = 'Study Translation';
-        let html = `<div class="swedish-text">${escapeHtml(item.swedish)}</div>`;
+        let html = '';
+        
+        // Display timestamp at the top
+        if (timestamp && timestamp.start) {
+            html += `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
+        }
+        
+        html += `<div class="swedish-text">${escapeHtml(item.swedish)}</div>`;
         
         if (item.literal) {
             html += `<div class="translation-label">Literal Translation</div>`;
@@ -540,6 +565,15 @@ async function sendChatMessage() {
     const message = chatInput.value.trim();
     if (!message || !apiKey) return;
 
+    // Check for {add- word} pattern
+    const addWordMatch = message.match(/\{add-\s*([^}]+)\}/i);
+    if (addWordMatch) {
+        const wordToAdd = addWordMatch[1].trim();
+        await addExpressionFromChat(wordToAdd, 'main');
+        chatInput.value = '';
+        return;
+    }
+
     // Add user message to chat
     addChatMessage('user', message);
     currentChatHistory.push({ role: 'user', content: message });
@@ -565,6 +599,115 @@ async function sendChatMessage() {
         addChatMessage('assistant', 'Sorry, I encountered an error. Please try again.');
     } finally {
         chatSendBtn.disabled = false;
+    }
+}
+
+// Add expression from chat using {add- word} command
+async function addExpressionFromChat(word, context = 'main') {
+    if (!apiKey || !word) return;
+    
+    try {
+        // Ask GPT for the meaning
+        const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide a brief, clear definition.`;
+        const meaningResponse = await callOpenAI([
+            {
+                role: 'system',
+                content: 'You are a Swedish language tutor. Provide clear, concise definitions.'
+            },
+            {
+                role: 'user',
+                content: meaningPrompt
+            }
+        ]);
+        
+        // Create expression object
+        const newExpression = {
+            word: word,
+            meaning: meaningResponse.trim(),
+            example: ''
+        };
+        
+        // Add to current analysis expressions
+        if (!currentAnalysis.expressions) {
+            currentAnalysis.expressions = [];
+        }
+        currentAnalysis.expressions.push(newExpression);
+        
+        // Update expressions display
+        if (context === 'main') {
+            displayExpressions();
+        } else if (context === 'study') {
+            // Update study modal expressions if word matches
+            if (currentStudyItem && currentStudyItem.type === 'translation') {
+                const swedishText = currentStudyItem.item.swedish.toLowerCase();
+                if (swedishText.includes(word.toLowerCase())) {
+                    displayStudyExpressions();
+                }
+            }
+        }
+        
+        // Show confirmation
+        addChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`);
+        
+    } catch (error) {
+        console.error('Error adding expression:', error);
+        addChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`);
+    }
+}
+
+// Display expressions (refresh the expressions section)
+function displayExpressions() {
+    if (!currentAnalysis || !currentAnalysis.expressions) return;
+    
+    expressionsContent.innerHTML = '';
+    
+    currentAnalysis.expressions.forEach((expr, index) => {
+        const item = document.createElement('div');
+        item.className = 'expression-item';
+        
+        let html = `<span class="expression-word">${escapeHtml(expr.word)}</span>`;
+        if (expr.meaning) {
+            html += `<span class="expression-meaning">${escapeHtml(expr.meaning)}</span>`;
+        }
+        if (expr.example) {
+            html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(expr.example)}</div>`;
+        }
+        
+        item.innerHTML = html;
+        item.addEventListener('click', () => openStudyModal('expression', expr, index));
+        expressionsContent.appendChild(item);
+    });
+}
+
+// Display study expressions (refresh study modal expressions)
+function displayStudyExpressions() {
+    if (!currentAnalysis || !currentAnalysis.expressions || !currentStudyItem) return;
+    
+    studyExpressionsContent.innerHTML = '';
+    
+    const swedishText = currentStudyItem.item.swedish.toLowerCase();
+    const relatedExpressions = currentAnalysis.expressions.filter(expr => {
+        const word = expr.word.toLowerCase();
+        return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
+    });
+    
+    if (relatedExpressions.length > 0) {
+        studyExpressionsSection.style.display = 'block';
+        relatedExpressions.forEach(expr => {
+            const exprDiv = document.createElement('div');
+            exprDiv.className = 'study-expression-item';
+            
+            let exprHtml = `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+            if (expr.meaning) {
+                exprHtml += `<span class="study-expression-meaning">${escapeHtml(expr.meaning)}</span>`;
+            }
+            if (expr.example) {
+                exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(expr.example)}</div>`;
+            }
+            
+            exprDiv.innerHTML = exprHtml;
+            studyExpressionsContent.appendChild(exprDiv);
+        });
     }
 }
 
@@ -766,18 +909,70 @@ function reopenAnalysis(savedItem) {
         }
     });
 
+    // Study history button
+    studyHistoryBtn.addEventListener('click', () => {
+        showChatHistory(currentStudyChatHistory);
+    });
+
     // Close modal when clicking outside
     studyModal.addEventListener('click', (e) => {
         if (e.target === studyModal) {
             closeStudyModal();
         }
     });
+
+    // Chat history modal
+    closeHistoryBtn.addEventListener('click', () => {
+        chatHistoryModal.style.display = 'none';
+    });
+
+    chatHistoryModal.addEventListener('click', (e) => {
+        if (e.target === chatHistoryModal) {
+            chatHistoryModal.style.display = 'none';
+        }
+    });
 }); // End of DOMContentLoaded
+
+// Show chat history
+function showChatHistory(chatHistory) {
+    chatHistoryContent.innerHTML = '';
+    
+    if (!chatHistory || chatHistory.length === 0) {
+        chatHistoryContent.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No chat history yet.</p>';
+        chatHistoryModal.style.display = 'flex';
+        return;
+    }
+    
+    chatHistory.forEach((msg, index) => {
+        if (msg.role === 'system') return; // Skip system messages
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat-history-message ${msg.role}`;
+        
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-history-bubble';
+        bubble.textContent = msg.content;
+        
+        messageDiv.appendChild(bubble);
+        chatHistoryContent.appendChild(messageDiv);
+    });
+    
+    chatHistoryModal.style.display = 'flex';
+}
 
 // Send study chat message
 async function sendStudyChatMessage() {
     const message = studyChatInput.value.trim();
     if (!message || !apiKey || !currentStudyItem) return;
+
+    // Check for {add- word} pattern
+    const addWordMatch = message.match(/\{add-\s*([^}]+)\}/i);
+    if (addWordMatch) {
+        const wordToAdd = addWordMatch[1].trim();
+        await addExpressionFromStudyChat(wordToAdd);
+        studyChatInput.value = '';
+        return;
+    }
 
     // Add user message to chat
     addStudyChatMessage('user', message);
@@ -804,6 +999,49 @@ async function sendStudyChatMessage() {
         addStudyChatMessage('assistant', 'Sorry, I encountered an error. Please try again.');
     } finally {
         studyChatSendBtn.disabled = false;
+    }
+}
+
+// Add expression from study chat
+async function addExpressionFromStudyChat(word) {
+    if (!apiKey || !word) return;
+    
+    try {
+        // Ask GPT for the meaning
+        const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide a brief, clear definition.`;
+        const meaningResponse = await callOpenAI([
+            {
+                role: 'system',
+                content: 'You are a Swedish language tutor. Provide clear, concise definitions.'
+            },
+            {
+                role: 'user',
+                content: meaningPrompt
+            }
+        ]);
+        
+        // Create expression object
+        const newExpression = {
+            word: word,
+            meaning: meaningResponse.trim(),
+            example: ''
+        };
+        
+        // Add to current analysis expressions
+        if (!currentAnalysis.expressions) {
+            currentAnalysis.expressions = [];
+        }
+        currentAnalysis.expressions.push(newExpression);
+        
+        // Update study modal expressions
+        displayStudyExpressions();
+        
+        // Show confirmation
+        addStudyChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`);
+        
+    } catch (error) {
+        console.error('Error adding expression:', error);
+        addStudyChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`);
     }
 }
 

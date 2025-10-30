@@ -112,7 +112,17 @@
                 <div class="study-modal-content">
                     <div class="study-header">
                         <h3 id="studyTitle">Study Mode</h3>
-                        <button id="closeStudyBtn" class="close-btn">Close</button>
+                        <div class="study-header-actions">
+                            <button id="studyHistoryBtn" class="icon-btn" title="View History">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 3h7v7H3z"></path>
+                                    <path d="M14 3h7v7h-7z"></path>
+                                    <path d="M14 14h7v7h-7z"></path>
+                                    <path d="M3 14h7v7H3z"></path>
+                                </svg>
+                            </button>
+                            <button id="closeStudyBtn" class="close-btn">Close</button>
+                        </div>
                     </div>
                     <div class="study-item-display">
                         <div id="studyItemContent"></div>
@@ -127,6 +137,19 @@
                             <input type="text" id="studyChatInput" placeholder="ask gpt" class="study-chat-input">
                             <button id="studyChatSendBtn" class="study-chat-send-btn">send</button>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat History Modal -->
+            <div id="chatHistoryModal" class="study-modal" style="display: none;">
+                <div class="study-modal-content" style="max-width: 600px;">
+                    <div class="study-header">
+                        <h3>Chat History</h3>
+                        <button id="closeHistoryBtn" class="close-btn">Close</button>
+                    </div>
+                    <div class="study-item-display">
+                        <div id="chatHistoryContent" class="chat-history-content"></div>
                     </div>
                 </div>
             </div>

@@ -700,10 +700,89 @@ body {
 .translation-item {
     cursor: pointer;
     transition: background-color 0.2s;
+    display: flex;
+    gap: 16px;
 }
 
 .translation-item:hover {
     background-color: #111;
+}
+
+.translation-item-content {
+    display: flex;
+    gap: 16px;
+    flex: 1;
+}
+
+.translation-timestamp {
+    color: #666;
+    font-size: 12px;
+    font-family: monospace;
+    min-width: 80px;
+    padding-top: 4px;
+    flex-shrink: 0;
+}
+
+.translation-text-wrapper {
+    flex: 1;
+}
+
+/* Study timestamp */
+.study-timestamp {
+    color: #ff6600;
+    font-size: 14px;
+    font-family: monospace;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #333;
+}
+
+/* Study header actions */
+.study-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+/* Chat history styles */
+.chat-history-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+}
+
+.chat-history-message {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chat-history-message.user {
+    align-items: flex-end;
+}
+
+.chat-history-message.assistant {
+    align-items: flex-start;
+}
+
+.chat-history-bubble {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    word-wrap: break-word;
+    line-height: 1.5;
+}
+
+.chat-history-message.user .chat-history-bubble {
+    background-color: #ff6600;
+    color: #000;
+}
+
+.chat-history-message.assistant .chat-history-bubble {
+    background-color: #1a1a1a;
+    color: #fff;
+    border: 1px solid #333;
 }
 
 .expression-item {

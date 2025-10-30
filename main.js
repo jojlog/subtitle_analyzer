@@ -22,7 +22,7 @@ function createWindow() {
   mainWindow.loadFile('index.html');
 
   // Open DevTools in development (comment out for production)
-  mainWindow.webContents.openDevTools();
+  // mainWindow.webContents.openDevTools(); // Disabled to prevent DevTools from opening automatically
 }
 
 app.whenReady().then(() => {

@@ -3,12 +3,13 @@ let currentAnalysis = null;
 let currentChatHistory = [];
 let currentSubtitleData = null;
 let apiKey = null;
+let isAnalyzing = false;
 
 // DOM elements (will be initialized when DOM is ready)
 let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, resultsSection, uploadSection;
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
-let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, closeSavedBtn;
-let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn;
+let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn;
+let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
 let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn;
 let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
@@ -16,6 +17,7 @@ let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
 // Study modal state
 let currentStudyItem = null;
 let currentStudyChatHistory = [];
+let isEditMode = false;
 
 // Initialize API key from storage
 function initializeAPIKey() {
@@ -40,6 +42,29 @@ function reinitializeAPIKey() {
     if (savedKey) {
         apiKey = savedKey;
     }
+}
+
+// Initialize theme from storage
+function initializeTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    applyTheme(savedTheme);
+    if (themeSelect) {
+        themeSelect.value = savedTheme;
+    }
+}
+
+// Apply theme
+function applyTheme(theme) {
+    // Remove all theme classes
+    document.body.classList.remove('theme-light', 'theme-blue', 'theme-green', 'theme-purple');
+    
+    // Apply selected theme (dark is default, no class needed)
+    if (theme !== 'dark') {
+        document.body.classList.add(`theme-${theme}`);
+    }
+    
+    // Save to localStorage
+    localStorage.setItem('theme', theme);
 }
 
 // OpenAI API call function
@@ -124,6 +149,7 @@ function parseVTT(content) {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM Content Loaded - Initializing...');
     // Initialize DOM elements
+    scriptName = document.getElementById('scriptName');
     uploadArea = document.getElementById('uploadArea');
     fileInput = document.getElementById('fileInput');
     fileInfo = document.getElementById('fileInfo');
@@ -141,7 +167,7 @@ document.addEventListener('DOMContentLoaded', () => {
     savedAnalysesBtn = document.getElementById('savedAnalysesBtn');
     savedAnalysesView = document.getElementById('savedAnalysesView');
     savedAnalysesList = document.getElementById('savedAnalysesList');
-    closeSavedBtn = document.getElementById('closeSavedBtn');
+    editSavedBtn = document.getElementById('editSavedBtn');
     settingsBtn = document.getElementById('settingsBtn');
     settingsView = document.getElementById('settingsView');
     closeSettingsBtn = document.getElementById('closeSettingsBtn');
@@ -161,17 +187,30 @@ document.addEventListener('DOMContentLoaded', () => {
     chatHistoryModal = document.getElementById('chatHistoryModal');
     chatHistoryContent = document.getElementById('chatHistoryContent');
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
+    themeSelect = document.getElementById('themeSelect');
 
     console.log('DOM elements initialized', {
         uploadArea: !!uploadArea,
         settingsBtn: !!settingsBtn,
         savedAnalysesBtn: !!savedAnalysesBtn,
         homeBtn: !!homeBtn,
-        studyModal: !!studyModal
+        studyModal: !!studyModal,
+        themeSelect: !!themeSelect
     });
+    
+    // Initialize theme
+    initializeTheme();
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
+        // Don't allow going home if analysis is in progress
+        if (isAnalyzing) {
+            const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
+            if (!confirmLeave) {
+                return;
+            }
+        }
+        
         // Close any open modals/views
         studyModal.style.display = 'none';
         savedAnalysesView.style.display = 'none';
@@ -184,6 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Reset file info
         fileInfo.style.display = 'none';
+        scriptName.textContent = '';
         currentAnalysis = null;
         currentChatHistory = [];
         currentSubtitleData = null;
@@ -233,6 +273,7 @@ async function handleFileSelect(file) {
         currentSubtitleData = parseVTT(content);
         
         fileName.textContent = file.name;
+        scriptName.textContent = file.name;
         fileInfo.style.display = 'flex';
         
         // Reset state
@@ -259,6 +300,12 @@ async function handleFileSelect(file) {
             return;
         }
 
+        if (isAnalyzing) {
+            alert('Analysis is already in progress. Please wait for it to complete.');
+            return;
+        }
+
+        isAnalyzing = true;
         analyzeBtn.disabled = true;
         analyzeBtn.textContent = 'Analyzing...';
 
@@ -346,10 +393,20 @@ ${subtitleText}`;
             currentAnalysis = analysisData;
             displayAnalysis(analysisData);
             
-            // Show results and chat
-            uploadSection.style.display = 'none';
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'flex';
+            // Check which view is currently active
+            const isInSettings = settingsView.style.display === 'flex';
+            const isInSavedAnalyses = savedAnalysesView.style.display === 'flex';
+            const isInStudyModal = studyModal && studyModal.style.display !== 'none';
+            
+            // Only auto-switch to results if user is not in another view
+            if (!isInSettings && !isInSavedAnalyses && !isInStudyModal) {
+                // Show results and chat
+                uploadSection.style.display = 'none';
+                resultsSection.style.display = 'flex';
+                chatSection.style.display = 'flex';
+            }
+            // If user is in settings/saved analyses, analysis data is already stored
+            // and will be shown when they return (handled by closeSettingsBtn)
             
             // Initialize chat history with analysis context
             currentChatHistory = [
@@ -367,6 +424,7 @@ ${subtitleText}`;
             console.error('Analysis error:', error);
             alert('Error during analysis: ' + error.message);
         } finally {
+            isAnalyzing = false;
             analyzeBtn.disabled = false;
             analyzeBtn.textContent = 'Analyze';
         }
@@ -374,14 +432,41 @@ ${subtitleText}`;
 
 // Helper function to find timestamp for Swedish text
 function findTimestampForText(swedishText) {
-    if (!currentSubtitleData) return null;
+    if (!currentSubtitleData || !swedishText) return null;
     
     const searchText = swedishText.toLowerCase().trim();
+    
+    // First try exact match
     for (const cue of currentSubtitleData) {
-        if (cue.text && cue.text.toLowerCase().includes(searchText) || searchText.includes(cue.text.toLowerCase())) {
+        if (cue.text && cue.text.toLowerCase().trim() === searchText) {
             return { start: cue.start, end: cue.end };
         }
     }
+    
+    // Then try partial match (text contains search or search contains text)
+    for (const cue of currentSubtitleData) {
+        if (cue.text) {
+            const cueText = cue.text.toLowerCase();
+            if (cueText.includes(searchText) || searchText.includes(cueText)) {
+                return { start: cue.start, end: cue.end };
+            }
+        }
+    }
+    
+    // For expressions/words, try word-by-word matching
+    const searchWords = searchText.split(/\s+/).filter(w => w.length > 2);
+    if (searchWords.length > 0) {
+        for (const cue of currentSubtitleData) {
+            if (cue.text) {
+                const cueText = cue.text.toLowerCase();
+                const matches = searchWords.filter(word => cueText.includes(word));
+                if (matches.length > 0) {
+                    return { start: cue.start, end: cue.end };
+                }
+            }
+        }
+    }
+    
     return null;
 }
 
@@ -410,8 +495,11 @@ function displayAnalysis(data) {
             const timestampStr = timestamp ? formatTimestamp(timestamp) : '';
             
             let html = `<div class="translation-item-content">`;
+            // Always show timestamp column, even if empty
             if (timestampStr) {
                 html += `<div class="translation-timestamp">${escapeHtml(timestampStr)}</div>`;
+            } else {
+                html += `<div class="translation-timestamp"></div>`;
             }
             html += `<div class="translation-text-wrapper">`;
             html += `<div class="swedish-text">${escapeHtml(trans.swedish)}</div>`;
@@ -451,7 +539,7 @@ function openStudyModal(type, item, index, timestamp = null) {
     // Display the item
     studyItemContent.innerHTML = '';
     studyExpressionsContent.innerHTML = '';
-    studyExpressionsSection.style.display = 'none';
+    studyExpressionsSection.style.display = 'block'; // Always show the section
     
     if (type === 'translation') {
         studyTitle.textContent = 'Study Translation';
@@ -487,14 +575,15 @@ function openStudyModal(type, item, index, timestamp = null) {
             });
             
             if (relatedExpressions.length > 0) {
-                studyExpressionsSection.style.display = 'block';
                 relatedExpressions.forEach(expr => {
                     const exprDiv = document.createElement('div');
                     exprDiv.className = 'study-expression-item';
                     
-                    let exprHtml = `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+                    let exprHtml = `<div class="study-expression-header">`;
+                    exprHtml += `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+                    exprHtml += `</div>`;
                     if (expr.meaning) {
-                        exprHtml += `<span class="study-expression-meaning">${escapeHtml(expr.meaning)}</span>`;
+                        exprHtml += `<div class="study-expression-meaning">${escapeHtml(expr.meaning)}</div>`;
                     }
                     if (expr.example) {
                         exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(expr.example)}</div>`;
@@ -503,7 +592,13 @@ function openStudyModal(type, item, index, timestamp = null) {
                     exprDiv.innerHTML = exprHtml;
                     studyExpressionsContent.appendChild(exprDiv);
                 });
+            } else {
+                // Show empty state message
+                studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
             }
+        } else {
+            // Show empty state message
+            studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
         }
         
         // Initialize chat with context
@@ -528,6 +623,9 @@ function openStudyModal(type, item, index, timestamp = null) {
         }
         
         studyItemContent.innerHTML = html;
+        
+        // Show empty expressions section for expression type too
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
         
         // Initialize chat with context
         currentStudyChatHistory = [
@@ -574,6 +672,13 @@ async function sendChatMessage() {
         return;
     }
 
+    // Extract word from message if it's about a specific word
+    let wordToSave = null;
+    const wordMatch = message.match(/["']([^"']+)["']/); // Extract word in quotes
+    if (wordMatch) {
+        wordToSave = wordMatch[1];
+    }
+    
     // Add user message to chat
     addChatMessage('user', message);
     currentChatHistory.push({ role: 'user', content: message });
@@ -582,21 +687,42 @@ async function sendChatMessage() {
     chatSendBtn.disabled = true;
     
     // Show loading
-    const loadingId = addChatMessage('assistant', 'Thinking...');
+    const loadingId = addChatMessage('assistant', 'Thinking...', null);
     
     try {
         const assistantMessage = await callOpenAI(currentChatHistory);
         
+        // Extract word from response if not already extracted
+        if (!wordToSave) {
+            // Try to find quoted words first
+            const responseWordMatch = assistantMessage.match(/["']([^"']+)["']/);
+            if (responseWordMatch) {
+                wordToSave = responseWordMatch[1];
+            } else {
+                // Look for patterns like "The word X" or "X means"
+                const wordPatternMatch = assistantMessage.match(/(?:word|expression)\s+["']?([\wåäöÅÄÖ]+)["']?/i);
+                if (wordPatternMatch) {
+                    wordToSave = wordPatternMatch[1];
+                } else {
+                    // Look for Swedish words (with åäö characters) in the response
+                    const swedishWordMatch = assistantMessage.match(/\b([\wåäöÅÄÖ]{3,})\b/);
+                    if (swedishWordMatch) {
+                        wordToSave = swedishWordMatch[1];
+                    }
+                }
+            }
+        }
+        
         // Remove loading message and add real response
         removeChatMessage(loadingId);
-        addChatMessage('assistant', assistantMessage);
+        addChatMessage('assistant', assistantMessage, wordToSave);
         
         currentChatHistory.push({ role: 'assistant', content: assistantMessage });
         
     } catch (error) {
         console.error('Chat error:', error);
         removeChatMessage(loadingId);
-        addChatMessage('assistant', 'Sorry, I encountered an error. Please try again.');
+        addChatMessage('assistant', 'Sorry, I encountered an error. Please try again.', null);
     } finally {
         chatSendBtn.disabled = false;
     }
@@ -604,9 +730,20 @@ async function sendChatMessage() {
 
 // Add expression from chat using {add- word} command
 async function addExpressionFromChat(word, context = 'main') {
-    if (!apiKey || !word) return;
+    if (!apiKey || !word) {
+        console.error('Missing API key or word');
+        return;
+    }
     
     try {
+        // Initialize currentAnalysis if it doesn't exist
+        if (!currentAnalysis) {
+            currentAnalysis = {
+                translations: [],
+                expressions: []
+            };
+        }
+        
         // Ask GPT for the meaning
         const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide a brief, clear definition.`;
         const meaningResponse = await callOpenAI([
@@ -619,6 +756,11 @@ async function addExpressionFromChat(word, context = 'main') {
                 content: meaningPrompt
             }
         ]);
+        
+        // Validate response
+        if (!meaningResponse || typeof meaningResponse !== 'string') {
+            throw new Error('Invalid response from API');
+        }
         
         // Create expression object
         const newExpression = {
@@ -635,28 +777,39 @@ async function addExpressionFromChat(word, context = 'main') {
         
         // Update expressions display
         if (context === 'main') {
-            displayExpressions();
+            if (expressionsContent) {
+                displayExpressions();
+            }
         } else if (context === 'study') {
             // Update study modal expressions if word matches
             if (currentStudyItem && currentStudyItem.type === 'translation') {
                 const swedishText = currentStudyItem.item.swedish.toLowerCase();
                 if (swedishText.includes(word.toLowerCase())) {
-                    displayStudyExpressions();
+                    if (studyExpressionsContent && studyExpressionsSection) {
+                        displayStudyExpressions();
+                    }
                 }
             }
         }
         
-        // Show confirmation
-        addChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`);
+        // Show confirmation (no save button needed for confirmation messages)
+        addChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`, null);
         
     } catch (error) {
         console.error('Error adding expression:', error);
-        addChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`);
+        console.error('Error details:', error.message, error.stack);
+        addChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`, null);
     }
 }
 
 // Display expressions (refresh the expressions section)
 function displayExpressions() {
+    // Check if DOM element exists
+    if (!expressionsContent) {
+        console.error('Expressions content DOM element not found');
+        return;
+    }
+    
     if (!currentAnalysis || !currentAnalysis.expressions) return;
     
     expressionsContent.innerHTML = '';
@@ -665,13 +818,26 @@ function displayExpressions() {
         const item = document.createElement('div');
         item.className = 'expression-item';
         
-        let html = `<span class="expression-word">${escapeHtml(expr.word)}</span>`;
+        // Find timestamp for expression if it appears in subtitle text
+        const timestamp = findTimestampForText(expr.word);
+        const timestampStr = timestamp ? formatTimestamp(timestamp) : '';
+        
+        let html = `<div class="expression-item-content">`;
+        if (timestampStr) {
+            html += `<div class="expression-timestamp">${escapeHtml(timestampStr)}</div>`;
+        } else {
+            // Always show timestamp column, even if empty
+            html += `<div class="expression-timestamp"></div>`;
+        }
+        html += `<div class="expression-text-wrapper">`;
+        html += `<span class="expression-word">${escapeHtml(expr.word)}</span>`;
         if (expr.meaning) {
             html += `<span class="expression-meaning">${escapeHtml(expr.meaning)}</span>`;
         }
         if (expr.example) {
             html += `<div style="margin-top: 4px; font-size: 12px; color: #999;">Example: ${escapeHtml(expr.example)}</div>`;
         }
+        html += `</div></div>`;
         
         item.innerHTML = html;
         item.addEventListener('click', () => openStudyModal('expression', expr, index));
@@ -681,25 +847,50 @@ function displayExpressions() {
 
 // Display study expressions (refresh study modal expressions)
 function displayStudyExpressions() {
-    if (!currentAnalysis || !currentAnalysis.expressions || !currentStudyItem) return;
+    // Check if DOM elements exist
+    if (!studyExpressionsContent || !studyExpressionsSection) {
+        console.error('Study expressions DOM elements not found');
+        return;
+    }
+    
+    if (!currentAnalysis) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
     
     studyExpressionsContent.innerHTML = '';
+    studyExpressionsSection.style.display = 'block'; // Always show section
     
-    const swedishText = currentStudyItem.item.swedish.toLowerCase();
-    const relatedExpressions = currentAnalysis.expressions.filter(expr => {
-        const word = expr.word.toLowerCase();
-        return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
-    });
+    if (!currentAnalysis.expressions || currentAnalysis.expressions.length === 0) {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
+        return;
+    }
     
-    if (relatedExpressions.length > 0) {
-        studyExpressionsSection.style.display = 'block';
-        relatedExpressions.forEach(expr => {
+    // If we have a current study item (translation), show related expressions
+    // Otherwise, show all expressions (for example, when adding from chat)
+    let expressionsToShow = [];
+    
+    if (currentStudyItem && currentStudyItem.type === 'translation') {
+        const swedishText = currentStudyItem.item.swedish.toLowerCase();
+        expressionsToShow = currentAnalysis.expressions.filter(expr => {
+            const word = expr.word.toLowerCase();
+            return swedishText.includes(word) || word.split(' ').some(w => swedishText.includes(w));
+        });
+    } else {
+        // If no specific translation context, show all expressions
+        expressionsToShow = currentAnalysis.expressions;
+    }
+    
+    if (expressionsToShow.length > 0) {
+        expressionsToShow.forEach(expr => {
             const exprDiv = document.createElement('div');
             exprDiv.className = 'study-expression-item';
             
-            let exprHtml = `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+            let exprHtml = `<div class="study-expression-header">`;
+            exprHtml += `<span class="study-expression-word">${escapeHtml(expr.word)}</span>`;
+            exprHtml += `</div>`;
             if (expr.meaning) {
-                exprHtml += `<span class="study-expression-meaning">${escapeHtml(expr.meaning)}</span>`;
+                exprHtml += `<div class="study-expression-meaning">${escapeHtml(expr.meaning)}</div>`;
             }
             if (expr.example) {
                 exprHtml += `<div class="study-expression-example">Example: ${escapeHtml(expr.example)}</div>`;
@@ -708,20 +899,99 @@ function displayStudyExpressions() {
             exprDiv.innerHTML = exprHtml;
             studyExpressionsContent.appendChild(exprDiv);
         });
+    } else {
+        studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';
     }
 }
 
-function addChatMessage(role, content) {
+function addChatMessage(role, content, wordToSave = null) {
     const messageDiv = document.createElement('div');
     const messageId = 'msg-' + Date.now();
     messageDiv.id = messageId;
     messageDiv.className = `chat-message ${role}`;
     
+    // Wrap bubble in container for button positioning
+    const bubbleContainer = document.createElement('div');
+    bubbleContainer.className = 'message-bubble-container';
+    
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     bubble.textContent = content;
     
-    messageDiv.appendChild(bubble);
+    bubbleContainer.appendChild(bubble);
+    
+    // Add save button for all assistant messages - outside the bubble
+    if (role === 'assistant') {
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'add-to-list-btn';
+        saveBtn.textContent = 'add on the list +';
+        saveBtn.title = 'Add words from this response to Important Expressions & Words';
+        saveBtn.addEventListener('click', async () => {
+            // Extract Swedish words from the message content
+            // Look for Swedish words (typically in quotes or mentioned in the text)
+            // Try multiple patterns to find Swedish words
+            let word = null;
+            
+            // Pattern 1: Quoted words like "word" or 'word'
+            const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
+            const quotedMatches = [...content.matchAll(quotedPattern)];
+            if (quotedMatches.length > 0) {
+                word = quotedMatches[0][1].trim();
+            }
+            
+            // Pattern 2: Look for Swedish words with åäö characters
+            if (!word) {
+                const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
+                const swedishMatches = [...content.matchAll(swedishWordPattern)];
+                // Filter out common English words and look for Swedish-specific patterns
+                const swedishWords = swedishMatches
+                    .map(m => m[1])
+                    .filter(w => /[åäöÅÄÖ]/.test(w) || w.length > 3)
+                    .filter(w => !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should'].includes(w.toLowerCase()));
+                if (swedishWords.length > 0) {
+                    word = swedishWords[0].trim();
+                }
+            }
+            
+            // Pattern 3: Look for "Swedish word: X" patterns
+            if (!word) {
+                const patternMatch = content.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.]+)/i);
+                if (patternMatch) {
+                    word = patternMatch[1].trim();
+                }
+            }
+            
+            // If still no word found, prompt user
+            if (!word) {
+                word = prompt('Enter the Swedish word/phrase to add:');
+                if (!word || !word.trim()) {
+                    return; // User cancelled
+                }
+                word = word.trim();
+            }
+            
+            // Add the word
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'saving...';
+            
+            // Determine context - check if we're in study modal
+            const isInStudyModal = studyModal && studyModal.style.display !== 'none';
+            if (isInStudyModal) {
+                await addExpressionFromStudyChat(word);
+            } else {
+                await addExpressionFromChat(word, 'main');
+            }
+            
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'added ✓';
+            setTimeout(() => {
+                saveBtn.textContent = 'add on the list +';
+            }, 2000);
+        });
+        bubbleContainer.appendChild(saveBtn);
+    }
+    
+    messageDiv.appendChild(bubbleContainer);
     chatMessages.appendChild(messageDiv);
     
     // Scroll to bottom
@@ -770,22 +1040,69 @@ function removeChatMessage(messageId) {
     // Saved analyses view
     savedAnalysesBtn.addEventListener('click', () => {
         console.log('Saved analyses button clicked');
+        isEditMode = false; // Reset edit mode when opening
         loadSavedAnalyses();
+        if (editSavedBtn) {
+            updateEditButton();
+        }
         savedAnalysesView.style.display = 'flex';
         resultsSection.style.display = 'none';
         uploadSection.style.display = 'none';
         chatSection.style.display = 'none';
     });
 
-    closeSavedBtn.addEventListener('click', () => {
-        savedAnalysesView.style.display = 'none';
-        if (currentAnalysis) {
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'flex';
+    // Edit/Delete button for saved analyses
+    if (editSavedBtn) {
+        editSavedBtn.addEventListener('click', () => {
+            if (isEditMode) {
+                // Delete mode - delete checked items
+                const checkedItems = document.querySelectorAll('.saved-item-checkbox:checked');
+                if (checkedItems.length === 0) {
+                    alert('Please select at least one item to delete.');
+                    return;
+                }
+                
+                const confirmDelete = confirm(`Are you sure you want to delete ${checkedItems.length} saved analysis/analyses?`);
+                if (!confirmDelete) {
+                    return;
+                }
+                
+                // Get IDs of checked items
+                const idsToDelete = Array.from(checkedItems).map(cb => cb.dataset.itemId);
+                
+                // Load saved analyses
+                const saved = JSON.parse(localStorage.getItem('saved_analyses') || '[]');
+                
+                // Filter out deleted items
+                const filtered = saved.filter(item => !idsToDelete.includes(item.id));
+                
+                // Save back to localStorage
+                localStorage.setItem('saved_analyses', JSON.stringify(filtered));
+                
+                // Exit edit mode and reload
+                isEditMode = false;
+                loadSavedAnalyses();
+                updateEditButton();
+            } else {
+                // Enter edit mode
+                isEditMode = true;
+                loadSavedAnalyses();
+                updateEditButton();
+            }
+        });
+    }
+
+function updateEditButton() {
+    if (editSavedBtn) {
+        if (isEditMode) {
+            editSavedBtn.textContent = 'Delete';
+            editSavedBtn.className = 'delete-btn';
         } else {
-            uploadSection.style.display = 'flex';
+            editSavedBtn.textContent = 'Edit';
+            editSavedBtn.className = 'edit-btn';
         }
-    });
+    }
+}
 
 function loadSavedAnalyses() {
     const saved = JSON.parse(localStorage.getItem('saved_analyses') || '[]');
@@ -804,17 +1121,46 @@ function loadSavedAnalyses() {
         const date = new Date(item.date);
         const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
         
+        // Add checkbox if in edit mode
+        const checkboxHtml = isEditMode ? 
+            `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
+        
         savedItem.innerHTML = `
-            <div class="saved-item-header">
-                <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
-                <span class="saved-item-date">${dateStr}</span>
+            <div class="saved-item-content-wrapper">
+                ${checkboxHtml}
+                <div class="saved-item-content">
+                    <div class="saved-item-header">
+                        <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+                        <span class="saved-item-date">${dateStr}</span>
+                    </div>
+                    <div class="saved-item-preview">${isEditMode ? 'Select to delete' : 'Click to reopen this analysis'}</div>
+                </div>
             </div>
-            <div class="saved-item-preview">Click to reopen this analysis</div>
         `;
         
-        savedItem.addEventListener('click', () => {
-            reopenAnalysis(item);
-        });
+        // Add click handler - only if not in edit mode
+        if (!isEditMode) {
+            savedItem.addEventListener('click', () => {
+                reopenAnalysis(item);
+            });
+        } else {
+            // In edit mode, clicking the checkbox should toggle it
+            const checkbox = savedItem.querySelector('.saved-item-checkbox');
+            if (checkbox) {
+                checkbox.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent item click
+                });
+            }
+            // Clicking the item should toggle checkbox
+            savedItem.addEventListener('click', (e) => {
+                if (e.target.type !== 'checkbox') {
+                    const checkbox = savedItem.querySelector('.saved-item-checkbox');
+                    if (checkbox) {
+                        checkbox.checked = !checkbox.checked;
+                    }
+                }
+            });
+        }
         
         savedAnalysesList.appendChild(savedItem);
     });
@@ -827,6 +1173,7 @@ function reopenAnalysis(savedItem) {
     currentSubtitleData = savedItem.subtitleData;
     
     fileName.textContent = savedItem.fileName;
+    scriptName.textContent = savedItem.fileName;
     fileInfo.style.display = 'flex';
     
     displayAnalysis(currentAnalysis);
@@ -844,6 +1191,12 @@ function reopenAnalysis(savedItem) {
     uploadSection.style.display = 'none';
     resultsSection.style.display = 'flex';
     chatSection.style.display = 'flex';
+    
+    // Exit edit mode when reopening
+    isEditMode = false;
+    if (editSavedBtn) {
+        updateEditButton();
+    }
 }
 
     // Settings
@@ -870,6 +1223,8 @@ function reopenAnalysis(savedItem) {
     closeSettingsBtn.addEventListener('click', () => {
         settingsView.style.display = 'none';
         if (currentAnalysis) {
+            // If analysis completed while in settings, ensure it's displayed
+            displayAnalysis(currentAnalysis);
             resultsSection.style.display = 'flex';
             chatSection.style.display = 'flex';
         } else {
@@ -898,6 +1253,14 @@ function reopenAnalysis(savedItem) {
         apiKeyInput.type = 'password';
         apiKeyInput.value = '';
     });
+    
+    // Theme selector
+    if (themeSelect) {
+        themeSelect.addEventListener('change', (e) => {
+            const selectedTheme = e.target.value;
+            applyTheme(selectedTheme);
+        });
+    }
 
     // Study modal functionality
     closeStudyBtn.addEventListener('click', closeStudyModal);
@@ -974,6 +1337,21 @@ async function sendStudyChatMessage() {
         return;
     }
 
+    // Extract word from message if it's about a specific word
+    let wordToSave = null;
+    const wordMatch = message.match(/["']([^"']+)["']/); // Extract word in quotes
+    if (wordMatch) {
+        wordToSave = wordMatch[1];
+    } else if (currentStudyItem && currentStudyItem.type === 'translation') {
+        // Try to extract from the Swedish text
+        const swedishText = currentStudyItem.item.swedish;
+        const words = swedishText.match(/\b\w+\b/g);
+        if (words && words.length > 0) {
+            // Use first significant word from the translation
+            wordToSave = words.find(w => w.length > 3) || words[0];
+        }
+    }
+    
     // Add user message to chat
     addStudyChatMessage('user', message);
     currentStudyChatHistory.push({ role: 'user', content: message });
@@ -982,21 +1360,42 @@ async function sendStudyChatMessage() {
     studyChatSendBtn.disabled = true;
     
     // Show loading
-    const loadingId = addStudyChatMessage('assistant', 'Thinking...');
+    const loadingId = addStudyChatMessage('assistant', 'Thinking...', null);
     
     try {
         const assistantMessage = await callOpenAI(currentStudyChatHistory);
         
+        // Extract word from response if not already extracted
+        if (!wordToSave) {
+            // Try to find quoted words first
+            const responseWordMatch = assistantMessage.match(/["']([^"']+)["']/);
+            if (responseWordMatch) {
+                wordToSave = responseWordMatch[1];
+            } else {
+                // Look for patterns like "The word X" or "X means"
+                const wordPatternMatch = assistantMessage.match(/(?:word|expression)\s+["']?([\wåäöÅÄÖ]+)["']?/i);
+                if (wordPatternMatch) {
+                    wordToSave = wordPatternMatch[1];
+                } else {
+                    // Look for Swedish words (with åäö characters) in the response
+                    const swedishWordMatch = assistantMessage.match(/\b([\wåäöÅÄÖ]{3,})\b/);
+                    if (swedishWordMatch) {
+                        wordToSave = swedishWordMatch[1];
+                    }
+                }
+            }
+        }
+        
         // Remove loading message and add real response
         removeStudyChatMessage(loadingId);
-        addStudyChatMessage('assistant', assistantMessage);
+        addStudyChatMessage('assistant', assistantMessage, wordToSave);
         
         currentStudyChatHistory.push({ role: 'assistant', content: assistantMessage });
         
     } catch (error) {
         console.error('Study chat error:', error);
         removeStudyChatMessage(loadingId);
-        addStudyChatMessage('assistant', 'Sorry, I encountered an error. Please try again.');
+        addStudyChatMessage('assistant', 'Sorry, I encountered an error. Please try again.', null);
     } finally {
         studyChatSendBtn.disabled = false;
     }
@@ -1004,9 +1403,20 @@ async function sendStudyChatMessage() {
 
 // Add expression from study chat
 async function addExpressionFromStudyChat(word) {
-    if (!apiKey || !word) return;
+    if (!apiKey || !word) {
+        console.error('Missing API key or word');
+        return;
+    }
     
     try {
+        // Initialize currentAnalysis if it doesn't exist
+        if (!currentAnalysis) {
+            currentAnalysis = {
+                translations: [],
+                expressions: []
+            };
+        }
+        
         // Ask GPT for the meaning
         const meaningPrompt = `What does the Swedish word "${word}" mean in English? Provide a brief, clear definition.`;
         const meaningResponse = await callOpenAI([
@@ -1019,6 +1429,11 @@ async function addExpressionFromStudyChat(word) {
                 content: meaningPrompt
             }
         ]);
+        
+        // Validate response
+        if (!meaningResponse || typeof meaningResponse !== 'string') {
+            throw new Error('Invalid response from API');
+        }
         
         // Create expression object
         const newExpression = {
@@ -1033,29 +1448,106 @@ async function addExpressionFromStudyChat(word) {
         }
         currentAnalysis.expressions.push(newExpression);
         
-        // Update study modal expressions
-        displayStudyExpressions();
+        // Update study modal expressions (show all expressions, including the new one)
+        // Only call if DOM elements exist (study modal is open)
+        if (studyExpressionsContent && studyExpressionsSection) {
+            displayStudyExpressions();
+        }
         
-        // Show confirmation
-        addStudyChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`);
+        // Also update main expressions display if visible
+        if (resultsSection && resultsSection.style.display !== 'none' && expressionsContent) {
+            displayExpressions();
+        }
+        
+        // Show confirmation (no save button needed for confirmation messages)
+        addStudyChatMessage('assistant', `Added "${word}" to Important Expressions & Words. Meaning: ${meaningResponse.trim()}`, null);
         
     } catch (error) {
         console.error('Error adding expression:', error);
-        addStudyChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`);
+        console.error('Error details:', error.message, error.stack);
+        addStudyChatMessage('assistant', `Sorry, I couldn't add "${word}". Please try again.`, null);
     }
 }
 
-function addStudyChatMessage(role, content) {
+function addStudyChatMessage(role, content, wordToSave = null) {
     const messageDiv = document.createElement('div');
     const messageId = 'study-msg-' + Date.now();
     messageDiv.id = messageId;
     messageDiv.className = `study-chat-message ${role}`;
     
+    // Wrap bubble in container for button positioning
+    const bubbleContainer = document.createElement('div');
+    bubbleContainer.className = 'study-message-bubble-container';
+    
     const bubble = document.createElement('div');
     bubble.className = 'study-message-bubble';
     bubble.textContent = content;
     
-    messageDiv.appendChild(bubble);
+    bubbleContainer.appendChild(bubble);
+    
+    // Add save button for all assistant messages - outside the bubble
+    if (role === 'assistant') {
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'add-to-list-btn';
+        saveBtn.textContent = 'add on the list +';
+        saveBtn.title = 'Add words from this response to Important Expressions & Words';
+        saveBtn.addEventListener('click', async () => {
+            // Extract Swedish words from the message content
+            // Try multiple patterns to find Swedish words
+            let word = null;
+            
+            // Pattern 1: Quoted words like "word" or 'word'
+            const quotedPattern = /["']([\wåäöÅÄÖ\s]+)["']/gi;
+            const quotedMatches = [...content.matchAll(quotedPattern)];
+            if (quotedMatches.length > 0) {
+                word = quotedMatches[0][1].trim();
+            }
+            
+            // Pattern 2: Look for Swedish words with åäö characters
+            if (!word) {
+                const swedishWordPattern = /\b([\wåäöÅÄÖ]{2,}(?:\s+[\wåäöÅÄÖ]+)*)\b/gi;
+                const swedishMatches = [...content.matchAll(swedishWordPattern)];
+                // Filter out common English words and look for Swedish-specific patterns
+                const swedishWords = swedishMatches
+                    .map(m => m[1])
+                    .filter(w => /[åäöÅÄÖ]/.test(w) || w.length > 3)
+                    .filter(w => !['the', 'and', 'that', 'this', 'with', 'from', 'have', 'been', 'will', 'they', 'there', 'would', 'could', 'should'].includes(w.toLowerCase()));
+                if (swedishWords.length > 0) {
+                    word = swedishWords[0].trim();
+                }
+            }
+            
+            // Pattern 3: Look for "Swedish word: X" patterns
+            if (!word) {
+                const patternMatch = content.match(/Swedish\s+(?:word|expression|phrase):\s*([^\s,\.]+)/i);
+                if (patternMatch) {
+                    word = patternMatch[1].trim();
+                }
+            }
+            
+            // If still no word found, prompt user
+            if (!word) {
+                word = prompt('Enter the Swedish word/phrase to add:');
+                if (!word || !word.trim()) {
+                    return; // User cancelled
+                }
+                word = word.trim();
+            }
+            
+            // Add the word
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'saving...';
+            await addExpressionFromStudyChat(word);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'added ✓';
+            setTimeout(() => {
+                saveBtn.textContent = 'add on the list +';
+            }, 2000);
+        });
+        bubbleContainer.appendChild(saveBtn);
+    }
+    
+    messageDiv.appendChild(bubbleContainer);
     studyChatMessages.appendChild(messageDiv);
     
     // Scroll to bottom

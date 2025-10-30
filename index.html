@@ -10,7 +10,10 @@
     <div class="app-container">
         <!-- Header -->
         <header class="header">
-            <h1>Swedish Subtitle Analyzer</h1>
+            <div class="header-center">
+                <h1>Swedish Subtitle Analyzer</h1>
+                <div id="scriptName" class="script-name"></div>
+            </div>
             <div class="header-actions">
                 <button id="homeBtn" class="icon-btn" title="Go Back to Home">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -63,7 +66,6 @@
                 
                 <div class="results-content">
                     <div id="translationsSection" class="result-subsection">
-                        <h3>Translations</h3>
                         <div id="translationsContent"></div>
                     </div>
                     
@@ -78,7 +80,7 @@
             <div id="savedAnalysesView" class="saved-analyses-view" style="display: none;">
                 <div class="saved-header">
                     <h2>Saved Analyses</h2>
-                    <button id="closeSavedBtn" class="close-btn">Close</button>
+                    <button id="editSavedBtn" class="edit-btn">Edit</button>
                 </div>
                 <div id="savedAnalysesList" class="saved-list"></div>
             </div>
@@ -94,6 +96,16 @@
                         <label for="apiKeyInput">OpenAI API Key</label>
                         <input type="password" id="apiKeyInput" placeholder="sk-...">
                         <button id="saveApiKeyBtn" class="save-btn">Save API Key</button>
+                    </div>
+                    <div class="setting-item">
+                        <label for="themeSelect">Color Theme</label>
+                        <select id="themeSelect" class="theme-select">
+                            <option value="dark">Dark</option>
+                            <option value="light">Light</option>
+                            <option value="blue">Blue</option>
+                            <option value="green">Green</option>
+                            <option value="purple">Purple</option>
+                        </select>
                     </div>
                 </div>
             </div>

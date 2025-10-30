@@ -61,7 +61,10 @@
             <div id="resultsSection" class="results-section" style="display: none;">
                 <div class="results-header">
                     <h2>Analysis Results</h2>
-                    <button id="saveAnalysisBtn" class="save-btn">Save Analysis</button>
+                    <div class="results-header-buttons">
+                        <button id="saveAnalysisBtn" class="save-btn">Save Analysis</button>
+                        <button id="closeResultsBtn" class="close-results-btn" title="Close">×</button>
+                    </div>
                 </div>
                 
                 <div class="results-content">
@@ -80,7 +83,10 @@
             <div id="savedAnalysesView" class="saved-analyses-view" style="display: none;">
                 <div class="saved-header">
                     <h2>Saved Analyses</h2>
-                    <button id="editSavedBtn" class="edit-btn">Edit</button>
+                    <div class="saved-header-buttons">
+                        <button id="goBackBtn" class="go-back-btn" style="display: none;">Go Back</button>
+                        <button id="editSavedBtn" class="edit-btn">Edit</button>
+                    </div>
                 </div>
                 <div id="savedAnalysesList" class="saved-list"></div>
             </div>

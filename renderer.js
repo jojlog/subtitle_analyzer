@@ -8,7 +8,7 @@ let isAnalyzing = false;
 // DOM elements (will be initialized when DOM is ready)
 let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, resultsSection, uploadSection;
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
-let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn;
+let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
 let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn;
@@ -20,41 +20,57 @@ let currentStudyChatHistory = [];
 let isEditMode = false;
 
 // Initialize API key from storage
-function initializeAPIKey() {
-    const savedKey = localStorage.getItem('openai_api_key');
-    if (savedKey) {
-        apiKey = savedKey;
-        return true;
+async function initializeAPIKey() {
+    try {
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadApiKey();
+            if (result.success && result.key) {
+                apiKey = result.key;
+                return true;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading API key:', error);
     }
     return false;
 }
 
-// Initialize on load
-if (initializeAPIKey()) {
-    console.log('API key loaded');
-} else {
-    console.log('API key not found');
-}
-
 // Reinitialize API key when loading saved analysis
-function reinitializeAPIKey() {
-    const savedKey = localStorage.getItem('openai_api_key');
-    if (savedKey) {
-        apiKey = savedKey;
+async function reinitializeAPIKey() {
+    try {
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadApiKey();
+            if (result.success && result.key) {
+                apiKey = result.key;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading API key:', error);
     }
 }
 
 // Initialize theme from storage
-function initializeTheme() {
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    applyTheme(savedTheme);
-    if (themeSelect) {
-        themeSelect.value = savedTheme;
+async function initializeTheme() {
+    try {
+        let savedTheme = 'dark';
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadTheme();
+            if (result.success) {
+                savedTheme = result.theme;
+            }
+        }
+        await applyTheme(savedTheme);
+        if (themeSelect) {
+            themeSelect.value = savedTheme;
+        }
+    } catch (error) {
+        console.error('Error loading theme:', error);
+        applyTheme('dark');
     }
 }
 
 // Apply theme
-function applyTheme(theme) {
+async function applyTheme(theme) {
     // Remove all theme classes
     document.body.classList.remove('theme-light', 'theme-blue', 'theme-green', 'theme-purple');
     
@@ -63,8 +79,14 @@ function applyTheme(theme) {
         document.body.classList.add(`theme-${theme}`);
     }
     
-    // Save to localStorage
-    localStorage.setItem('theme', theme);
+    // Save to file storage
+    try {
+        if (window.electronAPI) {
+            await window.electronAPI.saveTheme(theme);
+        }
+    } catch (error) {
+        console.error('Error saving theme:', error);
+    }
 }
 
 // OpenAI API call function
@@ -164,10 +186,12 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput = document.getElementById('chatInput');
     chatSendBtn = document.getElementById('chatSendBtn');
     saveAnalysisBtn = document.getElementById('saveAnalysisBtn');
+    closeResultsBtn = document.getElementById('closeResultsBtn');
     savedAnalysesBtn = document.getElementById('savedAnalysesBtn');
     savedAnalysesView = document.getElementById('savedAnalysesView');
     savedAnalysesList = document.getElementById('savedAnalysesList');
     editSavedBtn = document.getElementById('editSavedBtn');
+    goBackBtn = document.getElementById('goBackBtn');
     settingsBtn = document.getElementById('settingsBtn');
     settingsView = document.getElementById('settingsView');
     closeSettingsBtn = document.getElementById('closeSettingsBtn');
@@ -199,7 +223,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // Initialize theme
-    initializeTheme();
+    initializeTheme().catch(err => {
+        console.error('Error initializing theme:', err);
+    });
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
@@ -1008,7 +1034,7 @@ function removeChatMessage(messageId) {
 }
 
     // Save analysis
-    saveAnalysisBtn.addEventListener('click', () => {
+    saveAnalysisBtn.addEventListener('click', async () => {
         if (!currentAnalysis) {
             alert('No analysis to save.');
             return;
@@ -1023,25 +1049,61 @@ function removeChatMessage(messageId) {
             subtitleData: currentSubtitleData
         };
 
-        // Get existing saved analyses
-        const saved = JSON.parse(localStorage.getItem('saved_analyses') || '[]');
-        saved.push(savedAnalysis);
-        
-        // Keep only last 50 analyses
-        if (saved.length > 50) {
-            saved.shift();
+        try {
+            // Get existing saved analyses
+            let saved = [];
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadAnalyses();
+                if (result.success) {
+                    saved = result.data || [];
+                }
+            }
+            
+            saved.push(savedAnalysis);
+            
+            // Keep only last 50 analyses
+            if (saved.length > 50) {
+                saved.shift();
+            }
+            
+            // Save to file storage
+            if (window.electronAPI) {
+                const saveResult = await window.electronAPI.saveAnalyses(saved);
+                if (saveResult.success) {
+                    alert('Analysis saved!');
+                } else {
+                    alert('Error saving analysis: ' + (saveResult.error || 'Unknown error'));
+                }
+            } else {
+                alert('Storage API not available');
+            }
+        } catch (error) {
+            console.error('Error saving analysis:', error);
+            alert('Error saving analysis: ' + error.message);
         }
-        
-        localStorage.setItem('saved_analyses', JSON.stringify(saved));
-        
-        alert('Analysis saved!');
     });
 
+    // Close results button
+    if (closeResultsBtn) {
+        closeResultsBtn.addEventListener('click', () => {
+            resultsSection.style.display = 'none';
+            chatSection.style.display = 'none';
+            uploadSection.style.display = 'flex';
+            // Reset state
+            currentAnalysis = null;
+            currentChatHistory = [];
+            currentSubtitleData = null;
+            chatMessages.innerHTML = '';
+            translationsContent.innerHTML = '';
+            expressionsContent.innerHTML = '';
+        });
+    }
+
     // Saved analyses view
-    savedAnalysesBtn.addEventListener('click', () => {
+    savedAnalysesBtn.addEventListener('click', async () => {
         console.log('Saved analyses button clicked');
         isEditMode = false; // Reset edit mode when opening
-        loadSavedAnalyses();
+        await loadSavedAnalyses();
         if (editSavedBtn) {
             updateEditButton();
         }
@@ -1053,7 +1115,7 @@ function removeChatMessage(messageId) {
 
     // Edit/Delete button for saved analyses
     if (editSavedBtn) {
-        editSavedBtn.addEventListener('click', () => {
+        editSavedBtn.addEventListener('click', async () => {
             if (isEditMode) {
                 // Delete mode - delete checked items
                 const checkedItems = document.querySelectorAll('.saved-item-checkbox:checked');
@@ -1067,28 +1129,59 @@ function removeChatMessage(messageId) {
                     return;
                 }
                 
-                // Get IDs of checked items
-                const idsToDelete = Array.from(checkedItems).map(cb => cb.dataset.itemId);
-                
-                // Load saved analyses
-                const saved = JSON.parse(localStorage.getItem('saved_analyses') || '[]');
-                
-                // Filter out deleted items
-                const filtered = saved.filter(item => !idsToDelete.includes(item.id));
-                
-                // Save back to localStorage
-                localStorage.setItem('saved_analyses', JSON.stringify(filtered));
-                
-                // Exit edit mode and reload
-                isEditMode = false;
-                loadSavedAnalyses();
-                updateEditButton();
+                try {
+                    // Get IDs of checked items
+                    const idsToDelete = Array.from(checkedItems).map(cb => cb.dataset.itemId);
+                    
+                    // Load saved analyses
+                    let saved = [];
+                    if (window.electronAPI) {
+                        const result = await window.electronAPI.loadAnalyses();
+                        if (result.success) {
+                            saved = result.data || [];
+                        }
+                    }
+                    
+                    // Filter out deleted items
+                    const filtered = saved.filter(item => !idsToDelete.includes(item.id));
+                    
+                    // Save back to file storage
+                    if (window.electronAPI) {
+                        const saveResult = await window.electronAPI.saveAnalyses(filtered);
+                        if (!saveResult.success) {
+                            alert('Error deleting analyses: ' + (saveResult.error || 'Unknown error'));
+                            return;
+                        }
+                    }
+                    
+                    // Exit edit mode and reload
+                    isEditMode = false;
+                    await loadSavedAnalyses();
+                    updateEditButton();
+                } catch (error) {
+                    console.error('Error deleting analyses:', error);
+                    alert('Error deleting analyses: ' + error.message);
+                }
             } else {
                 // Enter edit mode
                 isEditMode = true;
-                loadSavedAnalyses();
+                await loadSavedAnalyses();
+                // Ensure goBackBtn is available
+                if (!goBackBtn) {
+                    goBackBtn = document.getElementById('goBackBtn');
+                }
                 updateEditButton();
             }
+        });
+    }
+
+    // Go Back button handler
+    if (goBackBtn) {
+        goBackBtn.addEventListener('click', async () => {
+            // Exit edit mode without deleting
+            isEditMode = false;
+            await loadSavedAnalyses();
+            updateEditButton();
         });
     }
 
@@ -1102,10 +1195,32 @@ function updateEditButton() {
             editSavedBtn.className = 'edit-btn';
         }
     }
+    
+    // Show/hide Go Back button based on edit mode
+    if (goBackBtn) {
+        if (isEditMode) {
+            goBackBtn.style.display = 'inline-block';
+        } else {
+            goBackBtn.style.display = 'none';
+        }
+    } else {
+        console.warn('goBackBtn not found - button may not be initialized');
+    }
 }
 
-function loadSavedAnalyses() {
-    const saved = JSON.parse(localStorage.getItem('saved_analyses') || '[]');
+async function loadSavedAnalyses() {
+    let saved = [];
+    try {
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+            }
+        }
+    } catch (error) {
+        console.error('Error loading saved analyses:', error);
+    }
+    
     savedAnalysesList.innerHTML = '';
 
     if (saved.length === 0) {
@@ -1140,8 +1255,8 @@ function loadSavedAnalyses() {
         
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
-            savedItem.addEventListener('click', () => {
-                reopenAnalysis(item);
+            savedItem.addEventListener('click', async () => {
+                await reopenAnalysis(item);
             });
         } else {
             // In edit mode, clicking the checkbox should toggle it
@@ -1166,8 +1281,8 @@ function loadSavedAnalyses() {
     });
 }
 
-function reopenAnalysis(savedItem) {
-    reinitializeAPIKey();
+async function reopenAnalysis(savedItem) {
+    await reinitializeAPIKey();
     currentAnalysis = savedItem.analysis;
     currentChatHistory = savedItem.chatHistory || [];
     currentSubtitleData = savedItem.subtitleData;
@@ -1200,15 +1315,26 @@ function reopenAnalysis(savedItem) {
 }
 
     // Settings
-    settingsBtn.addEventListener('click', () => {
+    settingsBtn.addEventListener('click', async () => {
         console.log('Settings button clicked');
-        const savedKey = localStorage.getItem('openai_api_key');
-        if (savedKey) {
-            // Show partially masked key
-            const masked = savedKey.substring(0, 7) + '...' + savedKey.substring(savedKey.length - 4);
-            apiKeyInput.value = masked;
-            apiKeyInput.type = 'text';
-        } else {
+        try {
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadApiKey();
+                if (result.success && result.key) {
+                    // Show partially masked key
+                    const masked = result.key.substring(0, 7) + '...' + result.key.substring(result.key.length - 4);
+                    apiKeyInput.value = masked;
+                    apiKeyInput.type = 'text';
+                } else {
+                    apiKeyInput.value = '';
+                    apiKeyInput.type = 'password';
+                }
+            } else {
+                apiKeyInput.value = '';
+                apiKeyInput.type = 'password';
+            }
+        } catch (error) {
+            console.error('Error loading API key:', error);
             apiKeyInput.value = '';
             apiKeyInput.type = 'password';
         }
@@ -1232,7 +1358,7 @@ function reopenAnalysis(savedItem) {
         }
     });
 
-    saveApiKeyBtn.addEventListener('click', () => {
+    saveApiKeyBtn.addEventListener('click', async () => {
         const newApiKey = apiKeyInput.value.trim();
         
         if (!newApiKey) {
@@ -1246,12 +1372,24 @@ function reopenAnalysis(savedItem) {
             return;
         }
         
-        localStorage.setItem('openai_api_key', newApiKey);
-        apiKey = newApiKey; // Update local variable
-        
-        alert('API key saved successfully!');
-        apiKeyInput.type = 'password';
-        apiKeyInput.value = '';
+        try {
+            if (window.electronAPI) {
+                const result = await window.electronAPI.saveApiKey(newApiKey);
+                if (result.success) {
+                    apiKey = newApiKey; // Update local variable
+                    alert('API key saved successfully!');
+                    apiKeyInput.type = 'password';
+                    apiKeyInput.value = '';
+                } else {
+                    alert('Error saving API key: ' + (result.error || 'Unknown error'));
+                }
+            } else {
+                alert('Storage API not available');
+            }
+        } catch (error) {
+            console.error('Error saving API key:', error);
+            alert('Error saving API key: ' + error.message);
+        }
     });
     
     // Theme selector

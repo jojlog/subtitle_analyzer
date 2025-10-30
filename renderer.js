@@ -104,7 +104,8 @@ async function callOpenAI(messages, model = 'gpt-4o-mini') {
         body: JSON.stringify({
             model: model,
             messages: messages,
-            temperature: 0.7
+            temperature: 0.7,
+            max_tokens: 4000
         })
     });
 
@@ -164,6 +165,34 @@ function parseVTT(content) {
         }
     }
 
+    return subtitles;
+}
+
+// TXT Parser - creates empty timestamp placeholders
+function parseTXT(content) {
+    if (!content || typeof content !== 'string') {
+        console.warn('parseTXT: Invalid content provided');
+        return [];
+    }
+    
+    // Handle different line ending formats (Windows \r\n, Unix \n, Mac \r)
+    const normalizedContent = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalizedContent.split('\n');
+    const subtitles = [];
+    
+    lines.forEach((line) => {
+        const trimmedLine = line.trim();
+        // Include non-empty lines
+        if (trimmedLine) {
+            subtitles.push({
+                start: '--:--:--',
+                end: '--:--:--',
+                text: trimmedLine
+            });
+        }
+    });
+    
+    console.log('parseTXT: Processed', lines.length, 'lines, created', subtitles.length, 'subtitle entries');
     return subtitles;
 }
 
@@ -275,28 +304,71 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadArea.style.borderColor = '#333';
 
         const files = e.dataTransfer.files;
-        if (files.length > 0 && files[0].name.endsWith('.vtt')) {
-            await handleFileSelect(files[0]);
+        if (files.length > 0) {
+            const fileName = files[0].name.toLowerCase();
+            if (fileName.endsWith('.vtt') || fileName.endsWith('.txt')) {
+                await handleFileSelect(files[0]);
+            }
         }
     });
 
     fileInput.addEventListener('change', async (e) => {
-        if (e.target.files.length > 0) {
-            await handleFileSelect(e.target.files[0]);
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            const fileName = file.name.toLowerCase();
+            if (fileName.endsWith('.vtt') || fileName.endsWith('.txt')) {
+                await handleFileSelect(file);
+            } else {
+                alert('Please select a .vtt or .txt file.');
+            }
         }
     });
 
 async function handleFileSelect(file) {
     try {
+        console.log('handleFileSelect called with file:', file.name, 'size:', file.size);
+        
+        // Validate file
+        if (!file) {
+            alert('No file selected.');
+            return;
+        }
+        
         // Use FileReader API for both drag-and-drop and file input
         const content = await new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = reject;
+            reader.onload = (e) => {
+                console.log('File read successfully, content length:', e.target.result.length);
+                resolve(e.target.result);
+            };
+            reader.onerror = (error) => {
+                console.error('FileReader error:', error);
+                reject(error);
+            };
             reader.readAsText(file);
         });
         
-        currentSubtitleData = parseVTT(content);
+        // Detect file type and use appropriate parser (case-insensitive)
+        const fileNameLower = file.name.toLowerCase();
+        if (fileNameLower.endsWith('.vtt')) {
+            currentSubtitleData = parseVTT(content);
+            console.log('Parsed VTT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
+        } else if (fileNameLower.endsWith('.txt')) {
+            currentSubtitleData = parseTXT(content);
+            console.log('Parsed TXT file, subtitle count:', currentSubtitleData ? currentSubtitleData.length : 0);
+        } else {
+            alert('Unsupported file type. Please upload a .vtt or .txt file.');
+            currentSubtitleData = null;
+            return;
+        }
+        
+        // Ensure we have valid data
+        if (!currentSubtitleData || currentSubtitleData.length === 0) {
+            alert('The file appears to be empty or could not be parsed. Please check the file contains text and try again.');
+            currentSubtitleData = null;
+            fileInfo.style.display = 'none';
+            return;
+        }
         
         fileName.textContent = file.name;
         scriptName.textContent = file.name;
@@ -307,16 +379,20 @@ async function handleFileSelect(file) {
         currentChatHistory = [];
         resultsSection.style.display = 'none';
         chatSection.style.display = 'none';
+        
+        console.log('File processed successfully, ready for analysis');
     } catch (error) {
         console.error('Error reading file:', error);
-        alert('Error reading file. Please try again.');
+        alert('Error reading file: ' + (error.message || 'Please try again.'));
+        currentSubtitleData = null;
+        fileInfo.style.display = 'none';
     }
 }
 
     // Analyze button
     analyzeBtn.addEventListener('click', async () => {
         if (!currentSubtitleData || currentSubtitleData.length === 0) {
-            alert('Please upload a valid .vtt file first.');
+            alert('Please upload a valid .vtt or .txt file first.');
             return;
         }
 
@@ -337,7 +413,20 @@ async function handleFileSelect(file) {
 
         try {
             // Combine all subtitle text
-            const subtitleText = currentSubtitleData.map(cue => cue.text).join('\n');
+            let subtitleText = currentSubtitleData.map(cue => cue.text).join('\n');
+            
+            // Add size limit to prevent extremely large API requests (especially for txt files)
+            const MAX_TEXT_LENGTH = 15000;
+            let wasTruncated = false;
+            
+            if (subtitleText.length > MAX_TEXT_LENGTH) {
+                subtitleText = subtitleText.substring(0, MAX_TEXT_LENGTH);
+                subtitleText += '\n\n[... file truncated due to size limit ...]';
+                wasTruncated = true;
+                console.warn(`File is very large (${currentSubtitleData.length} entries). Only first ${MAX_TEXT_LENGTH} characters will be analyzed.`);
+            }
+            
+            console.log(`Analyzing ${subtitleText.length} characters from ${currentSubtitleData.length} entries...`);
 
             // Create analysis prompt
             const analysisPrompt = `Analyze the following Swedish subtitle text and provide:
@@ -349,7 +438,7 @@ async function handleFileSelect(file) {
 
 2. Important expressions and words with their meanings and usage examples.
 
-Format the response as JSON with this structure:
+${wasTruncated ? 'Note: This text was truncated due to length. Focus on analyzing the beginning portion.\n\n' : ''}Format the response as JSON with this structure:
 {
   "translations": [
     {
@@ -498,9 +587,16 @@ function findTimestampForText(swedishText) {
 
 // Format timestamp for display
 function formatTimestamp(timestamp) {
-    if (!timestamp) return '';
+    if (!timestamp) return '--:--:--';
+    
+    const timestampStr = timestamp.start || '';
+    // If timestamp is empty or is the placeholder, return formatted placeholder
+    if (!timestampStr || timestampStr === '--:--:--') {
+        return '--:--:--';
+    }
+    
     // VTT format is usually HH:MM:SS.mmm or MM:SS.mmm
-    return timestamp.start || '';
+    return timestampStr;
 }
 
 // Display analysis results

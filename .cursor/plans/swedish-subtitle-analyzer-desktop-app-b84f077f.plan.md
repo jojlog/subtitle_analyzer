@@ -1,42 +1,55 @@
-<!-- b84f077f-7e48-429d-9fe6-5aeabd594699 c74b22ef-29fc-4070-9389-f07464427903 -->
-# Fix Close Button and Filter Duplicate Saved Analyses
+<!-- b84f077f-7e48-429d-9fe6-5aeabd594699 54423229-0812-48d7-9c59-de9e1d49a022 -->
+# Fix txt File Support Issues
 
-## Problems
+## Problem
 
-1. The X button closes results and goes to upload section, but should go back to saved analyses list
-2. Multiple versions of the same script are shown - should only show the latest version of each file
+The txt file support was added but files are still showing validation errors, suggesting currentSubtitleData is null or empty when it shouldn't be.
+
+## Root Causes to Fix
+
+1. Case sensitivity: File extension check uses `.endsWith('.txt')` which won't match `.TXT`
+2. File input handler might not be calling handleFileSelect correctly
+3. parseTXT might be returning empty array in some cases
+4. Need to ensure all code paths handle txt files
 
 ## Solution
 
-1. Update close results button handler to navigate to saved analyses view instead of upload
-2. Modify `loadSavedAnalyses()` function to filter duplicates and keep only the latest version of each fileName
+1. Make file extension checks case-insensitive
+2. Verify file input handler properly calls handleFileSelect
+3. Add error handling and ensure parseTXT always returns valid data
+4. Add console logging for debugging
 
 ## Implementation Steps
 
-### 1. Fix Close Results Button Handler
+### 1. Make file extension checks case-insensitive
 
-- Update the click handler for `closeResultsBtn` to:
-- Hide resultsSection and chatSection
-- Show savedAnalysesView (the "Saved Analyses" window/list)
-- Load and display saved analyses list
-- Reset edit mode to false
-- Update edit button state
+- Update all `.endsWith('.txt')` and `.endsWith('.vtt')` checks to use case-insensitive comparison
+- Use `.toLowerCase()` before checking extensions
 
-### 2. Filter Duplicate Saved Analyses
+### 2. Verify file input change handler
 
-- In `loadSavedAnalyses()` function:
-- Group saved analyses by `fileName`
-- For each fileName, keep only the item with the latest `date`
-- Sort filtered results by date (newest first)
-- Display the filtered list
+- Ensure fileInput change event properly passes the file to handleFileSelect
+- Check if there are any conditions that might prevent the handler from running
 
-### 3. Files to modify
+### 3. Improve parseTXT robustness
 
-- `/Users/zone/Downloads/subtitle_analyzer/renderer.js` - Update closeResultsBtn handler and loadSavedAnalyses function
+- Ensure parseTXT handles empty files gracefully
+- Return at least an empty array (not null) to prevent errors
+- Handle different line ending formats
+
+### 4. Add error handling
+
+- Add try-catch around file parsing
+- Log errors to console for debugging
+- Show helpful error messages
+
+### 5. Files to modify
+
+- `/Users/zone/Downloads/subtitle_analyzer/renderer.js` - Fix all file extension checks and improve error handling
 
 ### To-dos
 
-- [ ] Add goBackBtn button element in index.html next to editSavedBtn, initially hidden
-- [ ] Add goBackBtn initialization and click handler in renderer.js to exit edit mode
-- [ ] Update updateEditButton() function to show/hide goBackBtn based on isEditMode
-- [ ] Add CSS styling for .go-back-btn class in styles.css
+- [ ] Make all file extension checks case-insensitive using toLowerCase()
+- [ ] Verify fileInput change handler properly calls handleFileSelect
+- [ ] Improve parseTXT to handle edge cases and ensure it never returns null
+- [ ] Add error handling and logging around file parsing

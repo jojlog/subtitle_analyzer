@@ -1,44 +1,38 @@
 <!-- b84f077f-7e48-429d-9fe6-5aeabd594699 c74b22ef-29fc-4070-9389-f07464427903 -->
-# Add Go Back Button for Edit Mode
+# Fix Close Button and Filter Duplicate Saved Analyses
 
-## Problem
+## Problems
 
-Users need a way to exit edit mode without deleting items. Currently, the Edit button changes to Delete in edit mode, but there's no way to cancel/exit edit mode.
+1. The X button closes results and goes to upload section, but should go back to saved analyses list
+2. Multiple versions of the same script are shown - should only show the latest version of each file
 
 ## Solution
 
-Add a separate "Go Back" button that appears next to the Delete button when in edit mode. Clicking it will exit edit mode without deleting anything.
+1. Update close results button handler to navigate to saved analyses view instead of upload
+2. Modify `loadSavedAnalyses()` function to filter duplicates and keep only the latest version of each fileName
 
 ## Implementation Steps
 
-### 1. Update index.html
+### 1. Fix Close Results Button Handler
 
-- Add a new button `goBackBtn` next to `editSavedBtn` in the saved header
-- Initially hide it with `style="display: none;"`
+- Update the click handler for `closeResultsBtn` to:
+- Hide resultsSection and chatSection
+- Show savedAnalysesView (the "Saved Analyses" window/list)
+- Load and display saved analyses list
+- Reset edit mode to false
+- Update edit button state
 
-### 2. Update renderer.js
+### 2. Filter Duplicate Saved Analyses
 
-- Declare `goBackBtn` variable in DOM elements section
-- Initialize `goBackBtn` in DOMContentLoaded listener
-- Add click handler for `goBackBtn` that:
-- Sets `isEditMode = false`
-- Calls `loadSavedAnalyses()` to refresh the list
-- Calls `updateEditButton()` to update button states
-- Update `updateEditButton()` function to:
-- Show `goBackBtn` when `isEditMode` is true
-- Hide `goBackBtn` when `isEditMode` is false
-- Update `editSavedBtn` text and class as before
+- In `loadSavedAnalyses()` function:
+- Group saved analyses by `fileName`
+- For each fileName, keep only the item with the latest `date`
+- Sort filtered results by date (newest first)
+- Display the filtered list
 
-### 3. Update styles.css
+### 3. Files to modify
 
-- Add styling for `.go-back-btn` class (similar to edit button but with a neutral/secondary color)
-- Style the button container to handle left-aligned buttons
-
-### 4. Files to modify
-
-- `/Users/zone/Downloads/subtitle_analyzer/index.html` - Add goBackBtn button
-- `/Users/zone/Downloads/subtitle_analyzer/renderer.js` - Add button handler and update edit mode logic
-- `/Users/zone/Downloads/subtitle_analyzer/styles.css` - Style the Go Back button
+- `/Users/zone/Downloads/subtitle_analyzer/renderer.js` - Update closeResultsBtn handler and loadSavedAnalyses function
 
 ### To-dos
 

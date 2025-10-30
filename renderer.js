@@ -1085,17 +1085,19 @@ function removeChatMessage(messageId) {
 
     // Close results button
     if (closeResultsBtn) {
-        closeResultsBtn.addEventListener('click', () => {
+        closeResultsBtn.addEventListener('click', async () => {
+            // Navigate to saved analyses view
             resultsSection.style.display = 'none';
             chatSection.style.display = 'none';
-            uploadSection.style.display = 'flex';
-            // Reset state
-            currentAnalysis = null;
-            currentChatHistory = [];
-            currentSubtitleData = null;
-            chatMessages.innerHTML = '';
-            translationsContent.innerHTML = '';
-            expressionsContent.innerHTML = '';
+            uploadSection.style.display = 'none';
+            savedAnalysesView.style.display = 'flex';
+            
+            // Reset edit mode and load saved analyses
+            isEditMode = false;
+            await loadSavedAnalyses();
+            if (editSavedBtn) {
+                updateEditButton();
+            }
         });
     }
 
@@ -1228,8 +1230,36 @@ async function loadSavedAnalyses() {
         return;
     }
 
-    // Display in reverse order (newest first)
-    saved.reverse().forEach(item => {
+    // Filter duplicates: keep only the latest version of each fileName
+    const fileMap = new Map();
+    saved.forEach(item => {
+        const fileName = item.fileName;
+        const itemDate = new Date(item.date);
+        
+        if (!fileMap.has(fileName)) {
+            // First occurrence of this fileName
+            fileMap.set(fileName, item);
+        } else {
+            // Compare dates and keep the newer one
+            const existingDate = new Date(fileMap.get(fileName).date);
+            if (itemDate > existingDate) {
+                fileMap.set(fileName, item);
+            }
+        }
+    });
+    
+    // Convert map to array and sort by date (newest first)
+    const filtered = Array.from(fileMap.values()).sort((a, b) => {
+        return new Date(b.date) - new Date(a.date);
+    });
+
+    if (filtered.length === 0) {
+        savedAnalysesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No saved analyses yet.</p>';
+        return;
+    }
+
+    // Display filtered results (already sorted newest first)
+    filtered.forEach(item => {
         const savedItem = document.createElement('div');
         savedItem.className = 'saved-item';
         

@@ -267,13 +267,19 @@ body.theme-purple {
 }
 
 .file-project-name {
-    color: #ccc;
+    color: #fff;
     font-weight: 500;
 }
 
 .file-project-status {
     font-size: 12px;
     font-weight: 500;
+}
+
+.file-project-status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .file-project-status.status-ready {
@@ -292,10 +298,19 @@ body.theme-purple {
     color: #f44336;
 }
 
+.file-project-time-estimate {
+    font-size: 11px;
+    color: #999;
+    font-weight: normal;
+    margin-left: 0;
+    white-space: nowrap;
+}
+
 .file-project-actions {
     display: flex;
     gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .analyze-project-btn,
@@ -311,7 +326,7 @@ body.theme-purple {
 
 .analyze-project-btn {
     background-color: #ff6600;
-    color: #000;
+    color: #fff;
 }
 
 .analyze-project-btn:hover:not(:disabled) {
@@ -322,6 +337,54 @@ body.theme-purple {
     background-color: #333;
     color: #666;
     cursor: not-allowed;
+}
+
+.status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+}
+
+.action-status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+}
+
+.queued-status-btn {
+    background-color: #555;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: default;
+}
+
+.queued-status-btn:disabled {
+    background-color: #555;
+    color: #fff;
+    opacity: 1;
+}
+
+.analyzing-status-btn {
+    background-color: #ff6600;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: default;
+}
+
+.analyzing-status-btn:disabled {
+    background-color: #ff6600;
+    color: #fff;
+    opacity: 1;
 }
 
 .remove-project-btn {
@@ -351,6 +414,31 @@ body.theme-purple {
 }
 
 .analyze-btn:hover, .save-btn:hover {
+    background-color: #ff8833;
+}
+
+.cancel-btn, .cancel-project-btn {
+    background-color: #dc3545;
+    color: #fff;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 13px;
+    transition: background-color 0.2s;
+}
+
+.cancel-btn:hover, .cancel-project-btn:hover {
+    background-color: #c82333;
+}
+
+.analyzing-cancel-btn {
+    background-color: #ff6600;
+    color: #fff;
+}
+
+.analyzing-cancel-btn:hover {
     background-color: #ff8833;
 }
 
@@ -769,6 +857,24 @@ body.theme-purple {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+}
+
+.saved-item-processing {
+    background-color: #2a2a2a; /* Lighter gray background */
+    cursor: default; /* Not clickable */
+    opacity: 0.8;
+}
+
+.saved-item-processing:hover {
+    background-color: #2a2a2a; /* Keep same background on hover */
+    border-color: var(--border-color); /* No border color change */
+}
+
+.saved-item-processing-text {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
 }
 
 .saved-item-rename-btn {
@@ -1262,6 +1368,7 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-expression-item {
+    position: relative;
     padding: 10px 12px;
     background-color: #111;
     border-radius: 6px;
@@ -1285,6 +1392,83 @@ body.theme-purple .add-to-list-btn:hover {
     padding: 2px 6px;
     background-color: var(--bg-tertiary);
     border-radius: 4px;
+}
+
+.level-popup {
+    position: absolute;
+    top: 50%;
+    left: -8px;
+    transform: translate(-100%, -50%);
+    background-color: #d0d0d0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #000;
+    white-space: nowrap;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.level-popup.show {
+    display: block;
+    opacity: 1;
+}
+
+.level-popup::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: -5px;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 5px solid #d0d0d0;
+}
+
+/* Global fixed popup that sits above all layers (used to avoid clipping) */
+.level-popup-global {
+    position: fixed;
+    top: 0; /* set dynamically */
+    left: 0; /* set dynamically */
+    transform: translate(-100%, -50%);
+    background-color: #d0d0d0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #000;
+    white-space: nowrap;
+    z-index: 4000;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.level-popup-global.show {
+    display: block;
+    opacity: 1;
+}
+
+.level-popup-global::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: -5px;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    border-left: 5px solid #d0d0d0;
 }
 
 .study-expression-meaning {

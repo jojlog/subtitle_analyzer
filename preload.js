@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API key
   saveApiKey: (key) => ipcRenderer.invoke('save-api-key', key),
   loadApiKey: () => ipcRenderer.invoke('load-api-key'),
+  deleteApiKey: () => ipcRenderer.invoke('delete-api-key'),
   
   // Theme
   saveTheme: (theme) => ipcRenderer.invoke('save-theme', theme),

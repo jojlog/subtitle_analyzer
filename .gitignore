@@ -4,3 +4,26 @@ node_modules/
 dist/
 build/
 
+# Environment variables and sensitive files
+.env
+.env.local
+.env.*.local
+*.env
+
+# User data files (API keys, saved analyses, etc.)
+# Note: These are stored in Electron's userData directory, but excluding for safety
+api_key.json
+saved_analyses.json
+saved_study_sessions.json
+theme.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+

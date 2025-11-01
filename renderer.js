@@ -622,6 +622,11 @@ document.addEventListener('DOMContentLoaded', () => {
         themeSelect: !!themeSelect
     });
     
+    // Initialize API key (loads from .env or encrypted storage)
+    initializeAPIKey().catch(err => {
+        console.error('Error initializing API key:', err);
+    });
+    
     // Initialize theme
     initializeTheme().catch(err => {
         console.error('Error initializing theme:', err);

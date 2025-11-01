@@ -15,9 +15,10 @@
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {},
+  "dependencies": {
+    "dotenv": "^17.2.3"
+  },
   "devDependencies": {
     "electron": "^28.0.0"
   }
 }
-

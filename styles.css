@@ -510,7 +510,7 @@ body.theme-purple {
 
 /* Level Filter Section */
 .level-filter-section {
-    padding: 16px 24px;
+    padding: 16px 24px 16px 0;
     background-color: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 0;
@@ -556,7 +556,7 @@ body.theme-purple {
 .level-dropdown {
     position: absolute;
     top: 100%;
-    left: 24px;
+    left: 0;
     margin-top: 8px;
     background-color: var(--bg-secondary);
     border: 1px solid var(--border-color);
@@ -1749,5 +1749,129 @@ body.theme-purple .add-to-list-btn:hover {
 
 .expression-item:hover {
     background-color: #111;
+}
+
+/* Debug Console Styles */
+.debug-console {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 300px;
+    background-color: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    z-index: 1000;
+}
+
+.debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    background-color: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.debug-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.debug-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.debug-btn {
+    background: none;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.debug-btn:hover {
+    background-color: var(--accent-color);
+    color: var(--accent-text);
+}
+
+.debug-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.debug-message {
+    margin-bottom: 4px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    word-wrap: break-word;
+}
+
+.debug-message.info {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-left: 3px solid #0066cc;
+}
+
+.debug-message.success {
+    background-color: rgba(0, 255, 0, 0.1);
+    border-left: 3px solid #00cc66;
+}
+
+.debug-message.warn {
+    background-color: rgba(255, 165, 0, 0.1);
+    border-left: 3px solid #ffaa00;
+}
+
+.debug-message.error {
+    background-color: rgba(255, 0, 0, 0.1);
+    border-left: 3px solid #cc0066;
+}
+
+.debug-timestamp {
+    color: var(--text-tertiary);
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.debug-operation {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.debug-details {
+    color: var(--text-secondary);
+    font-family: inherit;
+}
+
+/* Light theme adjustments for debug console */
+body.theme-light .debug-console {
+    --debug-bg: #f8f8f8;
+    --debug-border: #e0e0e0;
+}
+
+body.theme-light .debug-message.info {
+    background-color: rgba(0, 102, 204, 0.05);
+}
+
+body.theme-light .debug-message.success {
+    background-color: rgba(0, 204, 102, 0.05);
+}
+
+body.theme-light .debug-message.warn {
+    background-color: rgba(255, 170, 0, 0.05);
+}
+
+body.theme-light .debug-message.error {
+    background-color: rgba(204, 0, 102, 0.05);
 }
 

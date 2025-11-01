@@ -1,76 +1,51 @@
-<!-- 12f7cc92-da89-4732-8714-25713ac2948f 32fecc36-6a58-4b67-bfe9-aa9cd96246ef -->
-# Create Placeholders for Queued Files and Show Paused Status
+<!-- 12f7cc92-da89-4732-8714-25713ac2948f fcf67499-1f24-4bd8-9df5-b146e99ca0ed -->
+# Fix Placeholder Replacement to Use Original Filename
 
-## Requirements
+## Problem
 
-1. Queued files should create placeholders in Saved Analyses when they become queued (1-A)
-2. Queued files in Home view should show "Paused" status text (not "queued") when paused (2-YES)
+When analysis completes and a placeholder exists, the code checks for duplicate filenames and prompts the user for a new name. However, placeholders should always be replaced with their original filename since they were created specifically for that file.
 
-## Implementation Plan
+## Solution
 
-### 1. Create Placeholders for Queued Files
-
-**File:** `renderer.js`
-
-**Location:** `analyzeProject()` function (around line 1469-1526)
-
-- **Current behavior:** Only the analyzing file creates a placeholder
-- **Change needed:** When a file starts analyzing, create placeholders for all queued files too
-- **Implementation:**
-- After creating placeholder for analyzing file (line 1480-1505)
-- Loop through `fileProjects` array
-- Find all files where `status === 'ready'` AND `isAnalyzing && !isAnalyzingProject` (queued condition)
-- For each queued file, create a placeholder entry with:
-  - `status: 'processing'`
-  - `paused: false`
-  - `progress: 0`
-  - `fileName`: queued file's name
-  - Same structure as analyzing file's placeholder
-- Add all queued file placeholders to the saved array
-- Save to storage
-
-### 2. Update Placeholders for Queued Files When Pause State Changes
+### 1. Remove Duplicate Check and Prompt for Placeholders
 
 **File:** `renderer.js`
+**Location:** Autosave section in `analyzeProject()` function (around lines 1651-1740)
 
-**Location:** `updateSavedItemStatusFromPause()` function (around line 2820-2848)
+**Current behavior:**
 
-- **Current behavior:** Only updates the current analyzing file's placeholder
-- **Change needed:** Also update all queued files' placeholders when pause state changes
-- **Implementation:**
-- After updating current placeholder (line 2834-2840)
-- Find all saved items with `status === 'processing'` AND `paused !== undefined`
-- Check if each item corresponds to a queued file in Home view
-- For each queued file placeholder, update `paused` field
-- Save updated array to storage
-- Refresh Saved files view if open
+- Checks for duplicates even when placeholder exists
+- Prompts user for new filename if duplicate found
+- This prevents placeholders from being replaced with their original filename
 
-### 3. Show "Paused" Status for Queued Files in Home View When Paused
+**Required behavior:**
 
-**File:** `renderer.js`
+- When placeholder exists (placeholderId found): Replace placeholder directly with its original filename - no duplicate check, no prompt
+- When no placeholder exists (new entry): Check for duplicates and prompt if needed
 
-**Location:** `renderFileProjectsList()` function (around line 1348-1350)
+**Implementation:**
 
-- **Current behavior:** Queued files always show "queued" status text
-- **Change needed:** Show "Paused" when `isQueued && isPaused`
-- **Implementation:**
-- Modify the queued status logic (line 1348-1350)
-- Check if `isQueued && isPaused`
-- If paused: show statusText as "Paused"
-- If not paused: show statusText as "queued"
-- Keep statusClass as 'status-ready' for both (or change if needed)
+- Split the logic into two paths:
 
-### 4. Clean Up Queued File Placeholders When Processing Starts
+1. **If placeholder exists:** 
 
-**File:** `renderer.js`
+- Get the placeholder's fileName directly
+- Replace the placeholder with completed analysis using that fileName
+- Skip duplicate check and prompt entirely
 
-**Location:** `analyzeProject()` function (around line 1502)
+2. **If no placeholder exists:**
 
-- **Current behavior:** Only removes placeholder for current analyzing file
-- **Change needed:** When a queued file starts processing, remove its old placeholder and update it to analyzing status
-- **Implementation:**
-- When starting analysis of a queued file (in `analyzeProject`)
-- Before creating new placeholder, check if placeholder exists for this file
-- If exists and status is 'processing', update it to reflect it's now analyzing
-- Update `paused: false` and reset progress
-- This ensures smooth transition from queued to analyzing
+- Get filename from project
+- Check for duplicates
+- Prompt for new filename if duplicate found
+- Create new entry with final filename
+
+**Changes needed:**
+
+- Move duplicate check and prompt logic to only run when `placeholderId` is null or placeholder not found
+- When placeholder exists and is found, directly update it with its stored fileName
+
+### To-dos
+
+- [ ] Split autosave logic: if placeholder exists, replace it directly with placeholder's original filename (no duplicate check, no prompt)
+- [ ] Keep duplicate check and prompt only for new entries (when no placeholder exists)

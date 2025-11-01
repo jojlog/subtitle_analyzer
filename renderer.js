@@ -18,6 +18,48 @@ let itemsPerPage = 50;
 
 // DOM elements (will be initialized when DOM is ready)
 let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, cancelBtn, resultsSection, uploadSection;
+
+// Debug logging helper
+function debugLog(operation, details = {}, level = 'info') {
+    const timestamp = new Date().toLocaleTimeString();
+    const prefix = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : '🔍';
+
+    // Log to browser console
+    console.log(`${prefix} [${timestamp}] ${operation}`, details);
+
+    // Log to visible debug console if available
+    const debugMessages = document.getElementById('debugMessages');
+    if (debugMessages) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `debug-message ${level}`;
+
+        const timestampSpan = document.createElement('span');
+        timestampSpan.className = 'debug-timestamp';
+        timestampSpan.textContent = `[${timestamp}]`;
+
+        const operationSpan = document.createElement('span');
+        operationSpan.className = 'debug-operation';
+        operationSpan.textContent = `${prefix} ${operation}`;
+
+        const detailsSpan = document.createElement('span');
+        detailsSpan.className = 'debug-details';
+        detailsSpan.textContent = JSON.stringify(details, null, 2);
+
+        messageDiv.appendChild(timestampSpan);
+        messageDiv.appendChild(operationSpan);
+        messageDiv.appendChild(detailsSpan);
+
+        debugMessages.appendChild(messageDiv);
+
+        // Auto-scroll to bottom
+        debugMessages.scrollTop = debugMessages.scrollHeight;
+
+        // Limit messages to prevent memory issues (keep last 200)
+        while (debugMessages.children.length > 200) {
+            debugMessages.removeChild(debugMessages.firstChild);
+        }
+    }
+}
 let fileProjectsList; // Container for multiple file projects list
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
@@ -615,6 +657,17 @@ document.addEventListener('DOMContentLoaded', () => {
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
     themeSelect = document.getElementById('themeSelect');
 
+    // Debug console elements
+    const debugBtn = document.getElementById('debugBtn');
+    const debugConsole = document.getElementById('debugConsole');
+    const clearDebugBtn = document.getElementById('clearDebugBtn');
+    const closeDebugBtn = document.getElementById('closeDebugBtn');
+
+    debugLog('🎯 DEBUG SYSTEM INITIALIZED', {
+        debugConsoleAvailable: !!debugConsole,
+        debugBtnAvailable: !!debugBtn
+    });
+
     console.log('DOM elements initialized', {
         uploadArea: !!uploadArea,
         settingsBtn: !!settingsBtn,
@@ -636,13 +689,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
+        debugLog('🏠 NAVIGATING TO HOME', {
+            isAnalyzing: isAnalyzing,
+            currentView: isAnalyzing ? 'analysis_progress' : 'home_reset',
+            hasCurrentAnalysis: !!currentAnalysis,
+            projectCount: fileProjects.length
+        });
+
         // Close any open modals/views
         studyModal.style.display = 'none';
         savedAnalysesView.style.display = 'none';
         settingsView.style.display = 'none';
-        
+
         // If analysis is in progress, preserve data and show progress
         if (isAnalyzing) {
+            debugLog('📊 PRESERVING ANALYSIS PROGRESS VIEW', {
+                currentProjectId: currentProjectId,
+                paused: isPaused
+            });
             // Show upload section - progress is shown in file list, not in fileInfo
             uploadSection.style.display = 'flex';
             fileInfo.style.display = 'none'; // Keep hidden - status shown in file list
@@ -651,7 +715,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // Don't reset data - analysis needs it to continue
             return;
         }
-        
+
+        debugLog('🔄 RESETTING TO HOME VIEW', {
+            resettingData: true,
+            clearingAnalysis: !!currentAnalysis
+        });
         // Reset to home/upload view (only when not analyzing)
         uploadSection.style.display = 'flex';
         resultsSection.style.display = 'none';
@@ -725,23 +793,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function handleFileSelect(file) {
     try {
-        console.log('handleFileSelect called with file:', file.name, 'size:', file.size);
-        
+        debugLog('📁 FILE UPLOAD STARTED', {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            lastModified: new Date(file.lastModified).toISOString()
+        });
+
         // Validate file
         if (!file) {
+            debugLog('❌ FILE UPLOAD FAILED', { reason: 'No file selected' }, 'error');
             alert('No file selected.');
             return;
         }
         
         // Use FileReader API for both drag-and-drop and file input
+        debugLog('📖 FILE READING STARTED', { fileName: file.name });
         const content = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                console.log('File read successfully, content length:', e.target.result.length);
+                debugLog('📖 FILE READING COMPLETED', {
+                    fileName: file.name,
+                    contentLength: e.target.result.length,
+                    contentPreview: e.target.result.substring(0, 100) + '...'
+                }, 'success');
                 resolve(e.target.result);
             };
             reader.onerror = (error) => {
-                console.error('FileReader error:', error);
+                debugLog('❌ FILE READING FAILED', { fileName: file.name, error: error.message }, 'error');
                 reject(error);
             };
             // Explicitly specify UTF-8 encoding to prevent Swedish characters from being broken
@@ -750,39 +829,78 @@ async function handleFileSelect(file) {
         
         // Fix encoding issues before parsing (in case file was already corrupted)
         const fixedContent = fixEncoding(content);
-        
+        debugLog('🔧 ENCODING FIXED', {
+            fileName: file.name,
+            originalLength: content.length,
+            fixedLength: fixedContent.length,
+            encodingChanged: content !== fixedContent
+        });
+
         // Detect file type and use appropriate parser (case-insensitive)
         const fileNameLower = file.name.toLowerCase();
         let subtitleData = null;
-        
+
+        debugLog('🔍 FILE PARSING STARTED', {
+            fileName: file.name,
+            fileType: fileNameLower.endsWith('.vtt') ? 'VTT' : 'TXT'
+        });
+
         if (fileNameLower.endsWith('.vtt')) {
             subtitleData = parseVTT(fixedContent);
-            console.log('Parsed VTT file, subtitle count:', subtitleData ? subtitleData.length : 0);
+            debugLog('🎬 VTT PARSING COMPLETED', {
+                fileName: file.name,
+                subtitleCount: subtitleData ? subtitleData.length : 0
+            }, 'success');
         } else if (fileNameLower.endsWith('.txt')) {
             subtitleData = parseTXT(fixedContent);
-            console.log('Parsed TXT file, subtitle count:', subtitleData ? subtitleData.length : 0);
+            debugLog('📄 TXT PARSING COMPLETED', {
+                fileName: file.name,
+                subtitleCount: subtitleData ? subtitleData.length : 0
+            }, 'success');
         } else {
+            debugLog('❌ UNSUPPORTED FILE TYPE', { fileName: file.name, fileType: fileNameLower }, 'error');
             alert('Unsupported file type. Please upload a .vtt or .txt file.');
             return;
         }
         
         // Ensure we have valid data
         if (!subtitleData || subtitleData.length === 0) {
+            debugLog('❌ EMPTY OR INVALID SUBTITLE DATA', {
+                fileName: file.name,
+                subtitleDataLength: subtitleData ? subtitleData.length : 0
+            }, 'error');
             alert(`The file "${file.name}" appears to be empty or could not be parsed. Please check the file contains text and try again.`);
             return;
         }
-        
+
         // Check if file already exists - prevent duplicates
         // Don't remove if currently analyzing - update existing instead
         const existingProject = fileProjects.find(p => p.fileName === file.name);
         if (existingProject) {
+            debugLog('📁 EXISTING PROJECT FOUND', {
+                fileName: file.name,
+                projectId: existingProject.id,
+                currentStatus: existingProject.status,
+                willUpdate: existingProject.status !== 'analyzing'
+            });
+
             // If not analyzing, update existing project
             if (existingProject.status !== 'analyzing') {
                 existingProject.subtitleData = subtitleData;
                 existingProject.status = 'ready';
                 existingProject.analysisData = null;
+                debugLog('🔄 EXISTING PROJECT UPDATED', {
+                    projectId: existingProject.id,
+                    fileName: file.name,
+                    newStatus: 'ready'
+                });
+            } else {
+                debugLog('⏳ EXISTING PROJECT PRESERVED', {
+                    projectId: existingProject.id,
+                    fileName: file.name,
+                    status: 'analyzing (preserved)'
+                });
             }
-            // If analyzing, don't modify it - keep the analyzing one
         } else {
             // Add new project
             const projectId = 'project-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -793,20 +911,34 @@ async function handleFileSelect(file) {
                 analysisData: null,
                 status: 'ready' // ready, analyzing, completed, error
             });
+            debugLog('➕ NEW PROJECT CREATED', {
+                projectId: projectId,
+                fileName: file.name,
+                status: 'ready',
+                totalProjects: fileProjects.length
+            });
         }
         
         // Render the file projects list
         renderFileProjectsList();
-        
+
         // Reset state
         currentAnalysis = null;
         currentChatHistory = [];
         resultsSection.style.display = 'none';
         chatSection.style.display = 'none';
-        
-        console.log('File processed successfully, ready for analysis');
+
+        debugLog('✅ FILE UPLOAD COMPLETED', {
+            fileName: file.name,
+            projectCount: fileProjects.length,
+            readyForAnalysis: true
+        }, 'success');
     } catch (error) {
-        console.error('Error reading file:', error);
+        debugLog('❌ FILE UPLOAD ERROR', {
+            fileName: file?.name || 'unknown',
+            error: error.message || 'Unknown error',
+            stack: error.stack
+        }, 'error');
         alert('Error reading file: ' + (error.message || 'Please try again.'));
         currentSubtitleData = null;
         fileInfo.style.display = 'none';
@@ -1434,16 +1566,28 @@ function renderFileProjectsList() {
 
 // Analyze a specific project
 async function analyzeProject(projectId) {
+    debugLog('🚀 ANALYSIS STARTED', {
+        projectId: projectId,
+        isAnalyzing: isAnalyzing,
+        hasApiKey: !!apiKey,
+        totalProjects: fileProjects.length
+    });
+
     const project = fileProjects.find(p => p.id === projectId);
-    if (!project) return;
-    
+    if (!project) {
+        debugLog('❌ ANALYSIS FAILED', { projectId: projectId, reason: 'Project not found' }, 'error');
+        return;
+    }
+
     if (!apiKey) {
+        debugLog('⚠️ ANALYSIS BLOCKED', { reason: 'No API key set' }, 'warn');
         alert('Please set your OpenAI API key in Settings first.');
         settingsBtn.click();
         return;
     }
-    
+
     if (isAnalyzing) {
+        debugLog('⚠️ ANALYSIS BLOCKED', { reason: 'Analysis already in progress' }, 'warn');
         // Silently return if analysis is already in progress (button should be disabled)
         return;
     }
@@ -1459,21 +1603,30 @@ async function analyzeProject(projectId) {
     currentProjectId = targetProject.id;
     currentSubtitleData = targetProject.subtitleData;
     fileName.textContent = targetProject.fileName;
-    scriptName.textContent = targetProject.fileName;
+    scriptName.textContent = ''; // Clear header filename - only show when viewing saved analysis
     // Don't show fileInfo at bottom - status is shown in file list instead
     fileInfo.style.display = 'none';
-    
+
     // Update project status - UPDATE EXISTING entry, do NOT create new one
     targetProject.status = 'analyzing';
     targetProject.progress = 0;
-    
+
+    debugLog('📋 PROJECT STATUS UPDATED', {
+        projectId: targetProject.id,
+        fileName: targetProject.fileName,
+        status: 'analyzing',
+        progress: 0,
+        subtitleCount: targetProject.subtitleData?.length || 0
+    });
+
     // IMPORTANT: Just update the existing entry, don't create duplicates
     // Users can have multiple files with same name, but clicking Start should UPDATE this specific one
     renderFileProjectsList();
-    
+
     isAnalyzing = true;
     shouldCancelAnalysis = false;
     isPaused = false; // Reset pause state when starting analysis
+    const analysisStartTime = Date.now(); // Track analysis start time
     // Button status is shown in file list, no need to update analyzeBtn here
     
     // Create placeholder saved analysis entry with processing status
@@ -1493,7 +1646,13 @@ async function analyzeProject(projectId) {
                 chatHistory: [],
                 subtitleData: null
             };
-            
+
+            debugLog('📝 PLACEHOLDER CREATION STARTED', {
+                placeholderId: placeholderId,
+                fileName: targetProject.fileName,
+                projectId: targetProject.id
+            });
+
             // Get existing saved analyses
             let saved = [];
             if (window.electronAPI) {
@@ -1501,25 +1660,43 @@ async function analyzeProject(projectId) {
                 if (result.success) {
                     saved = result.data || [];
                 }
+                debugLog('💾 SAVED ANALYSES LOADED', {
+                    savedCount: saved.length,
+                    loadSuccess: result.success
+                });
             }
-            
+
             // Check if this file already has a placeholder (might be a queued file starting)
-            const existingPlaceholderIndex = saved.findIndex(item => 
+            const existingPlaceholderIndex = saved.findIndex(item =>
                 item.fileName === targetProject.fileName && item.status === 'processing'
             );
-            
+
             if (existingPlaceholderIndex !== -1) {
                 // Update existing placeholder to reflect it's now analyzing (reuse it)
                 saved[existingPlaceholderIndex].id = placeholderId;
+                saved[existingPlaceholderIndex].fileName = targetProject.fileName; // Ensure fileName matches current project
                 saved[existingPlaceholderIndex].paused = false;
                 saved[existingPlaceholderIndex].progress = 0;
                 saved[existingPlaceholderIndex].date = new Date().toISOString();
                 currentPlaceholderId = placeholderId; // Store globally for status updates
+                debugLog('🔄 EXISTING PLACEHOLDER UPDATED', {
+                    placeholderId: placeholderId,
+                    fileName: targetProject.fileName,
+                    previousId: saved[existingPlaceholderIndex].id
+                });
             } else {
                 // Remove any other placeholders for this file (cleanup)
+                const beforeFilterCount = saved.length;
                 saved = saved.filter(item => !(item.fileName === targetProject.fileName && item.status === 'processing'));
+                const removedCount = beforeFilterCount - saved.length;
                 // Add new placeholder for analyzing file
                 saved.push(placeholderAnalysis);
+                debugLog('➕ NEW PLACEHOLDER CREATED', {
+                    placeholderId: placeholderId,
+                    fileName: targetProject.fileName,
+                    cleanedPlaceholders: removedCount,
+                    totalSaved: saved.length
+                });
             }
             
             // Create placeholders for all queued files
@@ -1574,10 +1751,23 @@ async function analyzeProject(projectId) {
     }
     
     try {
-        console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries for ${targetProject.fileName}...`);
-        
+        debugLog('⚙️ ANALYSIS PROCESSING STARTED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            subtitleCount: currentSubtitleData.length,
+            placeholderId: placeholderId
+        });
+
         // Process subtitles in batches
         const batchResults = await processSubtitleBatches(currentSubtitleData, placeholderId);
+
+        debugLog('⚙️ ANALYSIS PROCESSING COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            batchCount: batchResults.length,
+            totalTranslations: batchResults.reduce((sum, batch) => sum + (batch.translations?.length || 0), 0),
+            totalExpressions: batchResults.reduce((sum, batch) => sum + (batch.expressions?.length || 0), 0)
+        }, 'success');
         
         // Combine all batch results
         const analysisData = {
@@ -1627,16 +1817,36 @@ async function analyzeProject(projectId) {
             }
         });
         analysisData.expressions = Array.from(expressionsMap.values());
-        
-        console.log(`Analysis complete: ${analysisData.translations.length} translations, ${analysisData.expressions.length} expressions`);
-        
+
+        debugLog('✅ ANALYSIS COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            translationsCount: analysisData.translations.length,
+            expressionsCount: analysisData.expressions.length,
+            processingTime: Date.now() - analysisStartTime
+        }, 'success');
+
         // Update project with analysis data
         targetProject.analysisData = analysisData;
         targetProject.status = 'completed';
         delete targetProject.progress;
         delete targetProject.estimatedTimeRemaining;
+
+        debugLog('📋 PROJECT STATUS COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            status: 'completed'
+        });
         
         // Autosave: Automatically save the completed analysis
+        debugLog('💾 AUTOSAVE STARTED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            placeholderId: placeholderId,
+            analysisTranslations: analysisData.translations?.length || 0,
+            analysisExpressions: analysisData.expressions?.length || 0
+        });
+
         try {
             // Get existing saved analyses
             let saved = [];
@@ -1645,49 +1855,101 @@ async function analyzeProject(projectId) {
                 if (result.success) {
                     saved = result.data || [];
                 }
+                debugLog('💾 AUTOSAVE DATA LOADED', {
+                    savedCount: saved.length,
+                    loadSuccess: result.success
+                });
             }
             
-            // Update placeholder if it exists, otherwise create new entry
+            // Get filename from current project (single source of truth)
+            const currentProject = fileProjects.find(p => p.id === currentProjectId);
+            if (!currentProject) {
+                debugLog('❌ PROJECT NOT FOUND', { currentProjectId }, 'error');
+                return;
+            }
+            const finalFileName = currentProject.fileName;
+            
+            // Check if duplicate exists (excluding current placeholder)
+            const duplicateIndex = saved.findIndex(item =>
+                item.fileName === finalFileName &&
+                (placeholderId ? item.id !== placeholderId : true) &&
+                item.status !== 'processing' // Only check completed analyses
+            );
+
+            if (duplicateIndex !== -1) {
+                // Duplicate found - show warning and overwrite
+                debugLog('⚠️ DUPLICATE FILE DETECTED', {
+                    fileName: finalFileName,
+                    willOverwrite: true,
+                    existingItemId: saved[duplicateIndex].id
+                }, 'warn');
+                // Will overwrite when we update/create the entry below
+            }
+            
+            // Create the completed analysis entry
+            const completedAnalysis = {
+                id: placeholderId || Date.now().toString(),
+                fileName: finalFileName,
+                date: new Date().toISOString(),
+                analysis: analysisData,
+                chatHistory: currentChatHistory,
+                subtitleData: currentSubtitleData
+            };
+
             if (placeholderId) {
                 const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
                 if (placeholderIndex !== -1) {
-                    // Update placeholder to completed analysis
-                    saved[placeholderIndex] = {
-                        id: placeholderId,
-                        fileName: targetProject.fileName,
-                        date: new Date().toISOString(),
-                        analysis: analysisData,
-                        chatHistory: currentChatHistory,
-                        subtitleData: currentSubtitleData
-                        // Note: status and progress fields are removed (no longer processing)
-                    };
+                    // Replace placeholder with completed analysis
+                    debugLog('🔄 PLACEHOLDER REPLACED', {
+                        placeholderId: placeholderId,
+                        fileName: finalFileName
+                    });
+                    saved[placeholderIndex] = completedAnalysis;
                 } else {
-                    // Placeholder not found, create new entry
-                    const savedAnalysis = {
-                        id: Date.now().toString(),
-                        fileName: targetProject.fileName,
-                        date: new Date().toISOString(),
-                        analysis: analysisData,
-                        chatHistory: currentChatHistory,
-                        subtitleData: currentSubtitleData
-                    };
-                    // Remove any existing analyses with the same fileName (keep only latest)
-                    saved = saved.filter(item => item.fileName !== targetProject.fileName);
-                    saved.push(savedAnalysis);
+                    // Placeholder not found - check for duplicate to overwrite
+                    const overwriteIndex = saved.findIndex(item =>
+                        item.fileName === finalFileName &&
+                        item.status !== 'processing'
+                    );
+                    if (overwriteIndex !== -1) {
+                        // Overwrite duplicate
+                        debugLog('🔄 DUPLICATE OVERWRITTEN', {
+                            fileName: finalFileName,
+                            oldItemId: saved[overwriteIndex].id,
+                            newItemId: completedAnalysis.id
+                        });
+                        saved[overwriteIndex] = completedAnalysis;
+                    } else {
+                        // Create new entry
+                        debugLog('➕ NEW ANALYSIS CREATED', {
+                            itemId: completedAnalysis.id,
+                            fileName: finalFileName
+                        });
+                        saved.push(completedAnalysis);
+                    }
                 }
             } else {
-                // No placeholder, create new entry
-                const savedAnalysis = {
-                    id: Date.now().toString(),
-                    fileName: targetProject.fileName,
-                    date: new Date().toISOString(),
-                    analysis: analysisData,
-                    chatHistory: currentChatHistory,
-                    subtitleData: currentSubtitleData
-                };
-                // Remove any existing analyses with the same fileName (keep only latest)
-                saved = saved.filter(item => item.fileName !== targetProject.fileName);
-                saved.push(savedAnalysis);
+                // No placeholder - check for duplicate to overwrite
+                const overwriteIndex = saved.findIndex(item =>
+                    item.fileName === finalFileName &&
+                    item.status !== 'processing'
+                );
+                if (overwriteIndex !== -1) {
+                    // Overwrite duplicate
+                    debugLog('🔄 DUPLICATE OVERWRITTEN', {
+                        fileName: finalFileName,
+                        oldItemId: saved[overwriteIndex].id,
+                        newItemId: completedAnalysis.id
+                    });
+                    saved[overwriteIndex] = completedAnalysis;
+                } else {
+                    // Create new entry
+                    debugLog('➕ NEW ANALYSIS CREATED', {
+                        itemId: completedAnalysis.id,
+                        fileName: finalFileName
+                    });
+                    saved.push(completedAnalysis);
+                }
             }
             
             // Keep only last 50 analyses
@@ -1697,11 +1959,25 @@ async function analyzeProject(projectId) {
             
             // Save to file storage
             if (window.electronAPI) {
+                debugLog('💾 AUTOSAVE EXECUTING', {
+                    finalFileName: finalFileName,
+                    savedCount: saved.length,
+                    placeholderReplaced: !!placeholderId
+                });
+
                 const saveResult = await window.electronAPI.saveAnalyses(saved);
                 if (saveResult.success) {
-                    console.log('Analysis autosaved successfully');
+                    debugLog('✅ AUTOSAVE COMPLETED', {
+                        finalFileName: finalFileName,
+                        savedCount: saved.length,
+                        projectId: targetProject.id
+                    }, 'success');
                 } else {
-                    console.error('Error autosaving analysis:', saveResult.error);
+                    debugLog('❌ AUTOSAVE FAILED', {
+                        finalFileName: finalFileName,
+                        error: saveResult.error,
+                        projectId: targetProject.id
+                    }, 'error');
                 }
             }
             
@@ -1720,28 +1996,8 @@ async function analyzeProject(projectId) {
         currentAnalysis = analysisData;
         displayAnalysis(analysisData);
         
-        // Check which view is currently active
-        const isInSettings = settingsView.style.display === 'flex';
-        const isInSavedAnalyses = savedAnalysesView.style.display === 'flex';
-        const isInStudyModal = studyModal && studyModal.style.display !== 'none';
-        
-        // If analysis completes while user is in saved files view, switch to results
-        if (isInSavedAnalyses) {
-            savedAnalysesView.style.display = 'none';
-            uploadSection.style.display = 'none';
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'none';
-            if (expressionsContent && expressionsContent.parentElement) {
-                expressionsContent.parentElement.style.display = 'none';
-            }
-        } else if (!isInSettings && !isInStudyModal) {
-            uploadSection.style.display = 'none';
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'none';
-            if (expressionsContent && expressionsContent.parentElement) {
-                expressionsContent.parentElement.style.display = 'none';
-            }
-        }
+        // Don't automatically switch views after analysis completes
+        // User can manually view results or saved analyses when ready
         
         // Initialize chat history
         currentChatHistory = [
@@ -1782,15 +2038,27 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         currentPlaceholderId = null; // Clear placeholder ID
         
     } catch (error) {
-        console.error('Analysis error:', error);
+        debugLog('❌ ANALYSIS FAILED', {
+            projectId: currentProjectId,
+            fileName: targetProject?.fileName || 'unknown',
+            error: error.message,
+            stack: error.stack,
+            processingTime: Date.now() - analysisStartTime
+        }, 'error');
+
         // Reset pause state on error
         isPaused = false;
         currentPlaceholderId = null; // Clear placeholder ID on error
         // Find target project again (it might have changed after deduplication)
-        const errorProject = fileProjects.find(p => p.id === currentProjectId) || 
+        const errorProject = fileProjects.find(p => p.id === currentProjectId) ||
                            fileProjects.find(p => p.fileName === targetFileName);
         if (errorProject) {
             errorProject.status = 'error';
+            debugLog('📋 PROJECT STATUS ERROR', {
+                projectId: errorProject.id,
+                fileName: errorProject.fileName,
+                status: 'error'
+            });
         }
         renderFileProjectsList();
         alert('Error during analysis: ' + error.message);
@@ -2378,12 +2646,24 @@ function displayAnalysis(data) {
 
 async function sendChatMessage() {
     const message = chatInput.value.trim();
-    if (!message || !apiKey) return;
+    debugLog('💬 CHAT MESSAGE SENT', {
+        messageLength: message.length,
+        hasApiKey: !!apiKey,
+        messagePreview: message.substring(0, 50) + (message.length > 50 ? '...' : ''),
+        chatHistoryLength: currentChatHistory.length
+    });
+
+    if (!message || !apiKey) {
+        if (!message) debugLog('⚠️ CHAT MESSAGE SKIPPED', { reason: 'Empty message' }, 'warn');
+        if (!apiKey) debugLog('⚠️ CHAT MESSAGE SKIPPED', { reason: 'No API key' }, 'warn');
+        return;
+    }
 
     // Check for {add- word} pattern
     const addWordMatch = message.match(/\{add-\s*([^}]+)\}/i);
     if (addWordMatch) {
         const wordToAdd = addWordMatch[1].trim();
+        debugLog('➕ CHAT ADD EXPRESSION DETECTED', { wordToAdd: wordToAdd });
         await addExpressionFromChat(wordToAdd, 'main');
         chatInput.value = '';
         return;
@@ -2394,12 +2674,19 @@ async function sendChatMessage() {
     const wordMatch = message.match(/["']([^"']+)["']/); // Extract word in quotes
     if (wordMatch) {
         wordToSave = wordMatch[1];
+        debugLog('📝 CHAT WORD EXTRACTED', { wordToSave: wordToSave });
     }
-    
+
     // Add user message to chat
     addChatMessage('user', message);
     currentChatHistory.push({ role: 'user', content: message });
-    
+
+    debugLog('👤 USER MESSAGE ADDED', {
+        messageLength: message.length,
+        wordToSave: wordToSave,
+        updatedChatHistoryLength: currentChatHistory.length
+    });
+
     chatInput.value = '';
     chatSendBtn.disabled = true;
     
@@ -2447,14 +2734,27 @@ async function sendChatMessage() {
 
 // Add expression from chat using {add- word} command
 async function addExpressionFromChat(word, context = 'main') {
+    debugLog('➕ ADDING EXPRESSION FROM CHAT', {
+        word: word,
+        context: context,
+        hasApiKey: !!apiKey,
+        hasCurrentAnalysis: !!currentAnalysis
+    });
+
     if (!apiKey || !word) {
+        debugLog('❌ ADD EXPRESSION FAILED', {
+            reason: !apiKey ? 'No API key' : 'No word provided',
+            word: word,
+            hasApiKey: !!apiKey
+        }, 'error');
         console.error('Missing API key or word');
         return;
     }
-    
+
     try {
         // Initialize currentAnalysis if it doesn't exist
         if (!currentAnalysis) {
+            debugLog('🔄 INITIALIZING ANALYSIS STRUCTURE', { reason: 'No current analysis existed' });
             currentAnalysis = {
                 translations: [],
                 expressions: []
@@ -2650,7 +2950,15 @@ function removeChatMessage(messageId) {
 
     // Save analysis
     saveAnalysisBtn.addEventListener('click', async () => {
+        debugLog('💾 MANUAL SAVE INITIATED', {
+            hasAnalysis: !!currentAnalysis,
+            fileName: fileName.textContent,
+            translationsCount: currentAnalysis?.translations?.length || 0,
+            expressionsCount: currentAnalysis?.expressions?.length || 0
+        });
+
         if (!currentAnalysis) {
+            debugLog('❌ MANUAL SAVE FAILED', { reason: 'No analysis to save' }, 'error');
             alert('No analysis to save.');
             return;
         }
@@ -2663,6 +2971,12 @@ function removeChatMessage(messageId) {
             chatHistory: currentChatHistory,
             subtitleData: currentSubtitleData
         };
+
+        debugLog('📝 MANUAL SAVE ANALYSIS CREATED', {
+            id: savedAnalysis.id,
+            fileName: savedAnalysis.fileName,
+            date: savedAnalysis.date
+        });
 
         try {
             // Get existing saved analyses
@@ -2683,16 +2997,35 @@ function removeChatMessage(messageId) {
             
             // Save to file storage
             if (window.electronAPI) {
+                debugLog('💾 MANUAL SAVE EXECUTING', {
+                    totalSavedCount: saved.length,
+                    newAnalysisId: savedAnalysis.id
+                });
+
                 const saveResult = await window.electronAPI.saveAnalyses(saved);
                 if (saveResult.success) {
+                    debugLog('✅ MANUAL SAVE COMPLETED', {
+                        totalSavedCount: saved.length,
+                        savedAnalysisId: savedAnalysis.id,
+                        fileName: savedAnalysis.fileName
+                    }, 'success');
                     alert('Analysis saved!');
                 } else {
+                    debugLog('❌ MANUAL SAVE FAILED', {
+                        error: saveResult.error,
+                        savedAnalysisId: savedAnalysis.id
+                    }, 'error');
                     alert('Error saving analysis: ' + (saveResult.error || 'Unknown error'));
                 }
             } else {
+                debugLog('❌ MANUAL SAVE FAILED', { reason: 'Storage API not available' }, 'error');
                 alert('Storage API not available');
             }
         } catch (error) {
+            debugLog('❌ MANUAL SAVE ERROR', {
+                error: error.message,
+                savedAnalysisId: savedAnalysis.id
+            }, 'error');
             console.error('Error saving analysis:', error);
             alert('Error saving analysis: ' + error.message);
         }
@@ -2719,14 +3052,24 @@ function removeChatMessage(messageId) {
 
     // Saved analyses view
     savedAnalysesBtn.addEventListener('click', async () => {
-        console.log('Saved analyses button clicked');
-        
+        debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
+            isAnalyzing: isAnalyzing,
+            currentAnalysis: !!currentAnalysis,
+            projectCount: fileProjects.length
+        });
+
         // Show warning if analysis is in progress
         if (isAnalyzing) {
+            debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
+                showingConfirmDialog: true,
+                currentProjectId: currentProjectId
+            });
             const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
             if (!confirmLeave) {
+                debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
                 return;
             }
+            debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
         }
         
         isEditMode = false; // Reset edit mode when opening
@@ -2844,11 +3187,21 @@ function updateEditButton() {
 
 // Update saved item status in-place without recreating the DOM element
 function updateSavedItemStatus(itemId, progress, paused = false) {
-    if (!savedAnalysesList) return false;
-    
+    debugLog('📊 PLACEHOLDER STATUS UPDATED', {
+        itemId: itemId,
+        progress: progress,
+        paused: paused,
+        statusText: paused ? `paused (${progress}%)` : `analyzing (${progress}%)`
+    });
+
+    if (!savedAnalysesList) {
+        debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'savedAnalysesList not available', itemId: itemId }, 'warn');
+        return false;
+    }
+
     // Find the existing saved item element by data-item-id attribute
     const savedItemElement = savedAnalysesList.querySelector(`[data-item-id="${itemId}"]`);
-    
+
     if (savedItemElement) {
         const processingText = savedItemElement.querySelector('.saved-item-processing-text');
         if (processingText) {
@@ -2858,17 +3211,35 @@ function updateSavedItemStatus(itemId, progress, paused = false) {
             } else {
                 processingText.textContent = `analyzing (${progress}%)`;
             }
+            debugLog('✅ PLACEHOLDER UI UPDATED', {
+                itemId: itemId,
+                elementFound: true,
+                textUpdated: true
+            }, 'success');
             return true;
+        } else {
+            debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'processing text element not found', itemId: itemId }, 'warn');
         }
+    } else {
+        debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'saved item element not found', itemId: itemId }, 'warn');
     }
-    
+
     return false;
 }
 
 // Update saved item status when pause state changes
 async function updateSavedItemStatusFromPause(itemId, paused) {
-    if (!savedAnalysesList) return;
-    
+    debugLog('⏸️ PLACEHOLDER PAUSE STATUS CHANGED', {
+        itemId: itemId,
+        paused: paused,
+        action: paused ? 'paused' : 'resumed'
+    });
+
+    if (!savedAnalysesList) {
+        debugLog('⚠️ PLACEHOLDER PAUSE UPDATE SKIPPED', { reason: 'savedAnalysesList not available', itemId: itemId }, 'warn');
+        return;
+    }
+
     try {
         // Update saved item in storage
         let saved = [];
@@ -2882,9 +3253,17 @@ async function updateSavedItemStatusFromPause(itemId, paused) {
         const placeholderIndex = saved.findIndex(item => item.id === itemId);
         if (placeholderIndex !== -1) {
             saved[placeholderIndex].paused = paused;
+            debugLog('✅ PLACEHOLDER PAUSE UPDATED', {
+                itemId: itemId,
+                fileName: saved[placeholderIndex].fileName,
+                paused: paused
+            }, 'success');
+        } else {
+            debugLog('⚠️ PLACEHOLDER NOT FOUND FOR PAUSE UPDATE', { itemId: itemId }, 'warn');
         }
-        
+
         // Also update all queued files' placeholders when pause state changes
+        let queuedFilesUpdated = 0;
         saved.forEach((item, index) => {
             if (item.status === 'processing' && item.id !== itemId) {
                 // Check if this item corresponds to a queued file in Home view
@@ -2892,6 +3271,12 @@ async function updateSavedItemStatusFromPause(itemId, paused) {
                 if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
                     // This is a queued file - update its paused state
                     saved[index].paused = paused;
+                    queuedFilesUpdated++;
+                    debugLog('🔄 QUEUED PLACEHOLDER PAUSE UPDATED', {
+                        itemId: item.id,
+                        fileName: item.fileName,
+                        paused: paused
+                    });
                 }
             }
         });
@@ -2910,35 +3295,62 @@ async function updateSavedItemStatusFromPause(itemId, paused) {
 }
 
 async function loadSavedAnalyses() {
+    debugLog('📂 LOADING SAVED ANALYSES', { timestamp: new Date().toISOString() });
+
     let saved = [];
     try {
         if (window.electronAPI) {
             const result = await window.electronAPI.loadAnalyses();
             if (result.success) {
                 saved = result.data || [];
+                debugLog('✅ SAVED ANALYSES LOADED', {
+                    count: saved.length,
+                    loadSuccess: result.success
+                }, 'success');
+            } else {
+                debugLog('⚠️ SAVED ANALYSES LOAD FAILED', { error: result.error }, 'warn');
             }
+        } else {
+            debugLog('⚠️ SAVED ANALYSES LOAD SKIPPED', { reason: 'Electron API not available' }, 'warn');
         }
     } catch (error) {
+        debugLog('❌ SAVED ANALYSES LOAD ERROR', { error: error.message }, 'error');
         console.error('Error loading saved analyses:', error);
     }
     
     // Clean up already completed files: remove status/progress fields from items that have analysis data
     let needsCleanup = false;
+    let cleanedCount = 0;
     saved = saved.map(item => {
         // If item has analysis data but still has processing status, it's actually completed
         if (item.analysis && item.status === 'processing') {
             needsCleanup = true;
+            cleanedCount++;
             // Create new object without status and progress fields
             const { status, progress, ...cleanedItem } = item;
+            debugLog('🧹 CLEANED COMPLETED ANALYSIS', {
+                itemId: item.id,
+                fileName: item.fileName,
+                hadStatus: item.status,
+                hadProgress: item.progress
+            });
             return cleanedItem;
         }
         return item;
     });
-    
+
+    if (needsCleanup) {
+        debugLog('🧹 SAVED ANALYSES CLEANUP COMPLETED', {
+            cleanedItems: cleanedCount,
+            totalItems: saved.length
+        });
+    }
+
     // Save cleaned data back to storage if cleanup was needed
     if (needsCleanup && window.electronAPI) {
         try {
             await window.electronAPI.saveAnalyses(saved);
+            debugLog('💾 CLEANED DATA SAVED', { cleanedItems: cleanedCount }, 'success');
         } catch (error) {
             console.error('Error saving cleaned analyses:', error);
         }
@@ -3225,6 +3637,17 @@ async function loadSavedAnalyses() {
 }
 
 async function reopenAnalysis(savedItem) {
+    debugLog('🔄 REOPENING SAVED ANALYSIS', {
+        itemId: savedItem.id,
+        fileName: savedItem.fileName,
+        date: savedItem.date,
+        hasAnalysis: !!savedItem.analysis,
+        translationsCount: savedItem.analysis?.translations?.length || 0,
+        expressionsCount: savedItem.analysis?.expressions?.length || 0,
+        chatMessagesCount: savedItem.chatHistory?.length || 0,
+        hasSubtitleData: !!savedItem.subtitleData
+    });
+
     await reinitializeAPIKey();
     currentAnalysis = savedItem.analysis;
     currentChatHistory = savedItem.chatHistory || [];
@@ -3338,6 +3761,35 @@ async function reopenAnalysis(savedItem) {
             uploadSection.style.display = 'flex';
         }
     });
+
+    // Debug Console
+    if (debugBtn) {
+        debugBtn.addEventListener('click', () => {
+            const isVisible = debugConsole.style.display !== 'none';
+            debugConsole.style.display = isVisible ? 'none' : 'flex';
+            debugLog('🐛 DEBUG CONSOLE TOGGLED', {
+                visible: !isVisible,
+                action: isVisible ? 'hidden' : 'shown'
+            });
+        });
+    }
+
+    if (clearDebugBtn) {
+        clearDebugBtn.addEventListener('click', () => {
+            const debugMessages = document.getElementById('debugMessages');
+            if (debugMessages) {
+                debugMessages.innerHTML = '';
+                debugLog('🧹 DEBUG MESSAGES CLEARED', { action: 'manual_clear' });
+            }
+        });
+    }
+
+    if (closeDebugBtn) {
+        closeDebugBtn.addEventListener('click', () => {
+            debugConsole.style.display = 'none';
+            debugLog('❌ DEBUG CONSOLE CLOSED', { action: 'user_closed' });
+        });
+    }
 
     saveApiKeyBtn.addEventListener('click', async () => {
         const newApiKey = apiKeyInput.value.trim();

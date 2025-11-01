@@ -28,6 +28,12 @@
                         <polyline points="7 3 7 8 15 8"></polyline>
                     </svg>
                 </button>
+                <button id="debugBtn" class="icon-btn" title="Debug Console">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        <path d="M13 13h-2a1 1 0 00-1 1v3a1 1 0 001 1h2"></path>
+                    </svg>
+                </button>
                 <button id="settingsBtn" class="icon-btn" title="Settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -225,6 +231,18 @@
                         <div id="chatHistoryContent" class="chat-history-content"></div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Debug Console -->
+            <div id="debugConsole" class="debug-console" style="display: none;">
+                <div class="debug-header">
+                    <span class="debug-title">Debug Console</span>
+                    <div class="debug-actions">
+                        <button id="clearDebugBtn" class="debug-btn">Clear</button>
+                        <button id="closeDebugBtn" class="debug-btn">×</button>
+                    </div>
+                </div>
+                <div id="debugMessages" class="debug-messages"></div>
             </div>
         </main>
     </div>

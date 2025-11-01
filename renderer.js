@@ -5,10 +5,12 @@ let currentSubtitleData = null;
 let apiKey = null;
 let isAnalyzing = false;
 let shouldCancelAnalysis = false;
+let isPaused = false;
 
 // Multiple files support
 let fileProjects = []; // Array of { id, fileName, subtitleData, analysisData, status }
 let currentProjectId = null; // ID of currently selected/analyzing project
+let currentPlaceholderId = null; // ID of current placeholder in saved analyses
 
 // Pagination state
 let currentPage = 1;
@@ -1149,6 +1151,17 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
             break;
         }
         
+        // Wait if paused - poll until resume
+        while (isPaused && !shouldCancelAnalysis) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // Check again after pause check
+        if (shouldCancelAnalysis) {
+            console.log('Analysis cancelled by user');
+            break;
+        }
+        
         const batchGroup = batches.slice(i, i + CONCURRENT_BATCHES);
         const batchGroupIndices = batchGroup.map((_, groupIdx) => i + groupIdx);
         
@@ -1225,14 +1238,20 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
                             const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
                             if (placeholderIndex !== -1) {
                                 saved[placeholderIndex].progress = progress;
+                                saved[placeholderIndex].paused = isPaused; // Update pause state
                                 
                                 if (window.electronAPI) {
                                     await window.electronAPI.saveAnalyses(saved);
                                 }
                                 
-                                // Refresh saved files view if it's open
+                                // Update saved files view if it's open - use in-place update if possible
                                 if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
-                                    await loadSavedAnalyses();
+                                    // Try to update in-place first
+                                    const updated = updateSavedItemStatus(placeholderId, progress, isPaused);
+                                    // Only reload if update failed (item might not be rendered yet)
+                                    if (!updated) {
+                                        await loadSavedAnalyses();
+                                    }
                                 }
                             }
                         } catch (error) {
@@ -1316,13 +1335,23 @@ function renderFileProjectsList() {
         let estimatedTimeHtml = '';
         
         if (isAnalyzingProject) {
-            statusText = `Analyzing${typeof project.progress === 'number' ? ` (${project.progress}%)` : '...'}`;
+            // Show paused status if paused, otherwise analyzing
+            if (isPaused) {
+                statusText = `Paused${typeof project.progress === 'number' ? ` (${project.progress}%)` : '...'}`;
+            } else {
+                statusText = `Analyzing${typeof project.progress === 'number' ? ` (${project.progress}%)` : '...'}`;
+            }
             statusClass = 'status-analyzing';
             if (project.estimatedTimeRemaining) {
                 estimatedTimeHtml = `<div class="file-project-time-estimate">estimated time left: ${project.estimatedTimeRemaining}</div>`;
             }
         } else if (isQueued) {
-            statusText = 'queued';
+            // Show "Paused" if paused, otherwise "queued"
+            if (isPaused) {
+                statusText = 'Paused';
+            } else {
+                statusText = 'queued';
+            }
             statusClass = 'status-ready';
         } else if (project.status === 'completed') {
             statusText = 'Completed';
@@ -1341,7 +1370,7 @@ function renderFileProjectsList() {
                     <span class="file-project-name">${escapeHtml(project.fileName)}</span>
                     ${isAnalyzingProject ? 
                         `<span class="file-project-status ${statusClass}">${statusText}</span>` :
-                        statusText !== 'Ready' && !isQueued ? 
+                        statusText !== 'Ready' ? 
                         `<span class="file-project-status ${statusClass}">${statusText}</span>` :
                         ''
                     }
@@ -1349,22 +1378,25 @@ function renderFileProjectsList() {
                 <div class="file-project-actions">
                     ${isAnalyzingProject ? 
                         `<div class="action-status-container">
-                            <button class="analyze-project-btn analyzing-status-btn" data-project-id="${project.id}" disabled>
-                                ${project.progress ? `Analyzing... (${project.progress}%)` : 'Analyzing...'}
+                            <button class="pause-project-btn analyze-project-btn" data-project-id="${project.id}">
+                                ${isPaused ? 'Resume' : 'Pause'}
                             </button>
-                            <button class="cancel-project-btn analyzing-cancel-btn" data-project-id="${project.id}">Cancel</button>
                             ${project.estimatedTimeRemaining ? 
                                 `<div class="file-project-time-estimate">expected time left: ${project.estimatedTimeRemaining}</div>` :
                                 ''
                             }
                         </div>` :
-                        isQueued ? 
-                        `<button class="queued-status-btn" disabled>queued</button>` :
+                        // Only show Start/Re-analyze button if not queued, or if queued but paused
+                        !isQueued || isPaused ? 
                         `<button class="analyze-project-btn" data-project-id="${project.id}">
                             ${project.status === 'completed' ? 'Re-analyze' : 'Start'}
-                        </button>`
+                        </button>` :
+                        ''
                     }
-                    <button class="remove-project-btn" data-project-id="${project.id}" ${project.status === 'analyzing' ? 'disabled' : ''}>Remove</button>
+                    ${project.status !== 'analyzing' || isPaused ? 
+                        `<button class="remove-project-btn" data-project-id="${project.id}">Remove</button>` :
+                        ''
+                    }
                 </div>
             </div>
         `;
@@ -1374,7 +1406,20 @@ function renderFileProjectsList() {
     fileProjectsList.querySelectorAll('.analyze-project-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const projectId = e.target.dataset.projectId;
-            // Analyze this specific project, then continue with queue
+            // Check if this is a pause button
+            if (btn.classList.contains('pause-project-btn')) {
+                // Toggle pause state
+                isPaused = !isPaused;
+                renderFileProjectsList();
+                
+                // Update saved item status if placeholder exists
+                if (currentPlaceholderId) {
+                    await updateSavedItemStatusFromPause(currentPlaceholderId, isPaused);
+                }
+                
+                return;
+            }
+            // Otherwise, analyze this specific project
             await analyzeProject(projectId);
         });
     });
@@ -1383,23 +1428,6 @@ function renderFileProjectsList() {
         btn.addEventListener('click', (e) => {
             const projectId = e.target.dataset.projectId;
             removeProject(projectId);
-        });
-    });
-    
-    fileProjectsList.querySelectorAll('.cancel-project-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const projectId = e.target.dataset.projectId;
-            if (currentProjectId === projectId && isAnalyzing) {
-                shouldCancelAnalysis = true;
-                // Update UI immediately - set project back to ready status
-                const project = fileProjects.find(p => p.id === projectId);
-                if (project) {
-                    project.status = 'ready';
-                    delete project.progress;
-                    delete project.estimatedTimeRemaining;
-                    renderFileProjectsList();
-                }
-            }
         });
     });
 }
@@ -1445,6 +1473,7 @@ async function analyzeProject(projectId) {
     
     isAnalyzing = true;
     shouldCancelAnalysis = false;
+    isPaused = false; // Reset pause state when starting analysis
     // Button status is shown in file list, no need to update analyzeBtn here
     
     // Create placeholder saved analysis entry with processing status
@@ -1452,12 +1481,14 @@ async function analyzeProject(projectId) {
     if (targetProject.fileName) {
         try {
             placeholderId = Date.now().toString();
+            currentPlaceholderId = placeholderId; // Store globally for status updates
             const placeholderAnalysis = {
                 id: placeholderId,
                 fileName: targetProject.fileName,
                 date: new Date().toISOString(),
                 status: 'processing',
                 progress: 0,
+                paused: false,
                 analysis: null,
                 chatHistory: [],
                 subtitleData: null
@@ -1472,11 +1503,54 @@ async function analyzeProject(projectId) {
                 }
             }
             
-            // Remove any existing placeholder for this file
-            saved = saved.filter(item => !(item.fileName === targetProject.fileName && item.status === 'processing'));
+            // Check if this file already has a placeholder (might be a queued file starting)
+            const existingPlaceholderIndex = saved.findIndex(item => 
+                item.fileName === targetProject.fileName && item.status === 'processing'
+            );
             
-            // Add placeholder
-            saved.push(placeholderAnalysis);
+            if (existingPlaceholderIndex !== -1) {
+                // Update existing placeholder to reflect it's now analyzing (reuse it)
+                saved[existingPlaceholderIndex].id = placeholderId;
+                saved[existingPlaceholderIndex].paused = false;
+                saved[existingPlaceholderIndex].progress = 0;
+                saved[existingPlaceholderIndex].date = new Date().toISOString();
+                currentPlaceholderId = placeholderId; // Store globally for status updates
+            } else {
+                // Remove any other placeholders for this file (cleanup)
+                saved = saved.filter(item => !(item.fileName === targetProject.fileName && item.status === 'processing'));
+                // Add new placeholder for analyzing file
+                saved.push(placeholderAnalysis);
+            }
+            
+            // Create placeholders for all queued files
+            // Note: isAnalyzing is set to true just before this section
+            fileProjects.forEach(project => {
+                // Check if this project is queued (ready AND another file is analyzing)
+                const isQueuedProject = project.status === 'ready' && isAnalyzing && project.id !== targetProject.id;
+                if (isQueuedProject && project.fileName) {
+                    // Check if placeholder already exists for this queued file
+                    const existingPlaceholder = saved.find(item => 
+                        item.fileName === project.fileName && item.status === 'processing'
+                    );
+                    
+                    if (!existingPlaceholder) {
+                        // Create placeholder for queued file
+                        const queuedPlaceholderId = Date.now().toString() + '-' + project.id;
+                        const queuedPlaceholder = {
+                            id: queuedPlaceholderId,
+                            fileName: project.fileName,
+                            date: new Date().toISOString(),
+                            status: 'processing',
+                            progress: 0,
+                            paused: false,
+                            analysis: null,
+                            chatHistory: [],
+                            subtitleData: null
+                        };
+                        saved.push(queuedPlaceholder);
+                    }
+                }
+            });
             
             // Keep only last 50 analyses
             if (saved.length > 50) {
@@ -1703,8 +1777,15 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Update render
         renderFileProjectsList();
         
+        // Reset pause state on successful completion
+        isPaused = false;
+        currentPlaceholderId = null; // Clear placeholder ID
+        
     } catch (error) {
         console.error('Analysis error:', error);
+        // Reset pause state on error
+        isPaused = false;
+        currentPlaceholderId = null; // Clear placeholder ID on error
         // Find target project again (it might have changed after deduplication)
         const errorProject = fileProjects.find(p => p.id === currentProjectId) || 
                            fileProjects.find(p => p.fileName === targetFileName);
@@ -1716,6 +1797,9 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
     } finally {
         // Check if analysis was cancelled
         if (shouldCancelAnalysis) {
+            // Reset pause state on cancel
+            isPaused = false;
+            currentPlaceholderId = null; // Clear placeholder ID on cancel
             // Find target project again (it might have changed after deduplication)
             const cancelProject = fileProjects.find(p => p.id === currentProjectId) || 
                                 fileProjects.find(p => p.fileName === targetFileName);
@@ -2758,6 +2842,73 @@ function updateEditButton() {
     }
 }
 
+// Update saved item status in-place without recreating the DOM element
+function updateSavedItemStatus(itemId, progress, paused = false) {
+    if (!savedAnalysesList) return false;
+    
+    // Find the existing saved item element by data-item-id attribute
+    const savedItemElement = savedAnalysesList.querySelector(`[data-item-id="${itemId}"]`);
+    
+    if (savedItemElement) {
+        const processingText = savedItemElement.querySelector('.saved-item-processing-text');
+        if (processingText) {
+            // Update the progress text with pause status
+            if (paused) {
+                processingText.textContent = `paused (${progress}%)`;
+            } else {
+                processingText.textContent = `analyzing (${progress}%)`;
+            }
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Update saved item status when pause state changes
+async function updateSavedItemStatusFromPause(itemId, paused) {
+    if (!savedAnalysesList) return;
+    
+    try {
+        // Update saved item in storage
+        let saved = [];
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+            }
+        }
+        
+        const placeholderIndex = saved.findIndex(item => item.id === itemId);
+        if (placeholderIndex !== -1) {
+            saved[placeholderIndex].paused = paused;
+        }
+        
+        // Also update all queued files' placeholders when pause state changes
+        saved.forEach((item, index) => {
+            if (item.status === 'processing' && item.id !== itemId) {
+                // Check if this item corresponds to a queued file in Home view
+                const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
+                if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
+                    // This is a queued file - update its paused state
+                    saved[index].paused = paused;
+                }
+            }
+        });
+        
+        if (window.electronAPI) {
+            await window.electronAPI.saveAnalyses(saved);
+        }
+        
+        // Update saved files view if it's open - reload to show all updates
+        if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+            await loadSavedAnalyses();
+        }
+    } catch (error) {
+        console.error('Error updating saved item pause status:', error);
+    }
+}
+
 async function loadSavedAnalyses() {
     let saved = [];
     try {
@@ -2848,6 +2999,9 @@ async function loadSavedAnalyses() {
         // Add processing class if item is processing
         savedItem.className = isProcessing ? 'saved-item saved-item-processing' : 'saved-item';
         
+        // Add data-item-id attribute for easy lookup
+        savedItem.setAttribute('data-item-id', String(item.id));
+        
         const date = new Date(item.date);
         const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
         
@@ -2856,15 +3010,42 @@ async function loadSavedAnalyses() {
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
         if (isProcessing) {
-            // Processing item: show fileName and "analyzing (X%)" text, no rename button
+            // Processing item: show fileName and "analyzing (X%)", "paused (X%)", or "queued" text, no rename button
             const progress = item.progress || 0;
+            const paused = item.paused || false;
+            
+            // Check if this item corresponds to a queued file in the Home view
+            let isQueuedInHome = false;
+            if (isAnalyzing) {
+                const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
+                if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
+                    isQueuedInHome = true;
+                }
+            }
+            
+            // Determine status text: paused (queued) > paused (analyzing) > queued > analyzing
+            let processingStatusText;
+            if (isQueuedInHome && isPaused) {
+                // Queued file when paused
+                processingStatusText = 'paused';
+            } else if (isQueuedInHome) {
+                // Queued file when not paused
+                processingStatusText = 'queued';
+            } else if (paused) {
+                // Analyzing file when paused
+                processingStatusText = `paused (${progress}%)`;
+            } else {
+                // Analyzing file when not paused
+                processingStatusText = `analyzing (${progress}%)`;
+            }
+            
             savedItem.innerHTML = `
                 <div class="saved-item-content-wrapper">
                     ${checkboxHtml}
                     <div class="saved-item-content">
                         <div class="saved-item-top-row">
                             <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
-                            <span class="saved-item-processing-text">analyzing (${progress}%)</span>
+                            <span class="saved-item-processing-text">${processingStatusText}</span>
                         </div>
                         <div class="saved-item-bottom-row">
                             <span class="saved-item-date">${dateStr}</span>

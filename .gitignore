@@ -9,6 +9,8 @@ build/
 .env.local
 .env.*.local
 *.env
+.env.*
+!.env.example
 
 # User data files (API keys, saved analyses, etc.)
 # Note: These are stored in Electron's userData directory, but excluding for safety

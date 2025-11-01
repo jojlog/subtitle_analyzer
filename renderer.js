@@ -641,11 +641,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // If analysis is in progress, preserve data and show progress
         if (isAnalyzing) {
-            // Show upload section with file info to display progress
+            // Show upload section - progress is shown in file list, not in fileInfo
             uploadSection.style.display = 'flex';
-            if (fileInfo) {
-                fileInfo.style.display = 'flex';
-            }
+            fileInfo.style.display = 'none'; // Keep hidden - status shown in file list
             resultsSection.style.display = 'none';
             chatSection.style.display = 'none';
             // Don't reset data - analysis needs it to continue
@@ -1186,11 +1184,7 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
                 timeRemainingText = ` • ${formatTimeRemaining(estimatedSecondsRemaining)} remaining`;
             }
             
-            // Update button text to show progress and time estimate
-            if (analyzeBtn) {
-                analyzeBtn.textContent = `Analyzing... (Batch ${completedCount}/${batches.length}${timeRemainingText})`;
-            }
-            
+            // Update project progress in file list (no need to update analyzeBtn since fileInfo is hidden)
             // Update placeholder progress (throttled: only every 25%)
             if (placeholderId) {
                 const progress = Math.round((completedCount / batches.length) * 100);
@@ -1355,7 +1349,10 @@ function renderFileProjectsList() {
                 <div class="file-project-actions">
                     ${isAnalyzingProject ? 
                         `<div class="action-status-container">
-                            <button class="cancel-project-btn analyzing-cancel-btn" data-project-id="${project.id}">cancel</button>
+                            <button class="analyze-project-btn analyzing-status-btn" data-project-id="${project.id}" disabled>
+                                ${project.progress ? `Analyzing... (${project.progress}%)` : 'Analyzing...'}
+                            </button>
+                            <button class="cancel-project-btn analyzing-cancel-btn" data-project-id="${project.id}">Cancel</button>
                             ${project.estimatedTimeRemaining ? 
                                 `<div class="file-project-time-estimate">expected time left: ${project.estimatedTimeRemaining}</div>` :
                                 ''
@@ -1419,7 +1416,7 @@ async function analyzeProject(projectId) {
     }
     
     if (isAnalyzing) {
-        alert('Analysis is already in progress. Please wait for it to complete.');
+        // Silently return if analysis is already in progress (button should be disabled)
         return;
     }
     
@@ -1435,7 +1432,8 @@ async function analyzeProject(projectId) {
     currentSubtitleData = targetProject.subtitleData;
     fileName.textContent = targetProject.fileName;
     scriptName.textContent = targetProject.fileName;
-    fileInfo.style.display = 'flex';
+    // Don't show fileInfo at bottom - status is shown in file list instead
+    fileInfo.style.display = 'none';
     
     // Update project status - UPDATE EXISTING entry, do NOT create new one
     targetProject.status = 'analyzing';
@@ -1447,11 +1445,7 @@ async function analyzeProject(projectId) {
     
     isAnalyzing = true;
     shouldCancelAnalysis = false;
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = 'Analyzing...';
-    if (cancelBtn) {
-        cancelBtn.style.display = 'inline-block';
-    }
+    // Button status is shown in file list, no need to update analyzeBtn here
     
     // Create placeholder saved analysis entry with processing status
     let placeholderId = null;
@@ -1735,11 +1729,11 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         
         isAnalyzing = false;
         shouldCancelAnalysis = false;
-        analyzeBtn.disabled = false;
-        analyzeBtn.textContent = 'Analyze';
+        // Button status is shown in file list, no need to update analyzeBtn here
         if (cancelBtn) {
             cancelBtn.style.display = 'none';
         }
+        fileInfo.style.display = 'none'; // Keep hidden
         currentProjectId = null;
         renderFileProjectsList();
         
@@ -1820,17 +1814,19 @@ async function processQueue() {
         }
 
         if (isAnalyzing) {
-            alert('Analysis is already in progress. Please wait for it to complete.');
+            // Silently return if analysis is already in progress (button should be disabled)
             return;
         }
 
         isAnalyzing = true;
         shouldCancelAnalysis = false;
+        // Button status is shown in file list (fileInfo is hidden), but keep this for fallback old behavior
         analyzeBtn.disabled = true;
         analyzeBtn.textContent = 'Analyzing...';
         if (cancelBtn) {
-            cancelBtn.style.display = 'inline-block';
+            cancelBtn.style.display = 'none'; // Hide cancel button in fileInfo since we use file list
         }
+        fileInfo.style.display = 'none'; // Don't show fileInfo at bottom
         
         // Create placeholder saved analysis entry with processing status
         let placeholderId = null;
@@ -2075,6 +2071,7 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             if (cancelBtn) {
                 cancelBtn.style.display = 'none';
             }
+            fileInfo.style.display = 'none'; // Keep hidden
         }
     });
     

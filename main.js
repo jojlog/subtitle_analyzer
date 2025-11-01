@@ -166,34 +166,39 @@ ipcMain.handle('save-api-key', async (event, key) => {
 
 ipcMain.handle('load-api-key', async () => {
   try {
-    // First, check for API key in .env file (for development)
+    // First, check for API key in encrypted storage (user-entered in app)
+    try {
+      const filePath = getDataFilePath('api_key.json');
+      const data = await fs.readFile(filePath, 'utf8');
+      const parsed = JSON.parse(data);
+      
+      // Check if it's the old format (plain text) or new format (encrypted)
+      if (parsed.key && !parsed.encrypted) {
+        // Old format - migrate to encrypted format
+        const encrypted = encryptApiKey(parsed.key);
+        await fs.writeFile(filePath, JSON.stringify(encrypted), 'utf8');
+        await setSecureFilePermissions(filePath);
+        return { success: true, key: parsed.key };
+      } else if (parsed.encrypted) {
+        // New encrypted format
+        const decrypted = decryptApiKey(parsed);
+        return { success: true, key: decrypted };
+      }
+    } catch (error) {
+      // If no key in storage, fall through to .env check
+      if (error.code !== 'ENOENT') {
+        console.error('Error loading API key from storage (key not exposed):', error.message);
+      }
+    }
+    
+    // Fall back to .env file (for development) if no key entered in app
     if (process.env.OPENAI_API_KEY) {
       return { success: true, key: process.env.OPENAI_API_KEY };
     }
     
-    // Fall back to encrypted storage (for production)
-    const filePath = getDataFilePath('api_key.json');
-    const data = await fs.readFile(filePath, 'utf8');
-    const parsed = JSON.parse(data);
-    
-    // Check if it's the old format (plain text) or new format (encrypted)
-    if (parsed.key && !parsed.encrypted) {
-      // Old format - migrate to encrypted format
-      const encrypted = encryptApiKey(parsed.key);
-      await fs.writeFile(filePath, JSON.stringify(encrypted), 'utf8');
-      await setSecureFilePermissions(filePath);
-      return { success: true, key: parsed.key };
-    } else if (parsed.encrypted) {
-      // New encrypted format
-      const decrypted = decryptApiKey(parsed);
-      return { success: true, key: decrypted };
-    } else {
-      return { success: true, key: null };
-    }
+    // No API key found anywhere
+    return { success: true, key: null };
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      return { success: true, key: null };
-    }
     // Don't expose the API key in error messages
     console.error('Error loading API key (key not exposed):', error.message);
     return { success: false, error: 'Failed to load API key securely', key: null };

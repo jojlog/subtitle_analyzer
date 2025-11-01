@@ -314,7 +314,8 @@ body.theme-purple {
 }
 
 .analyze-project-btn,
-.remove-project-btn {
+.remove-project-btn,
+.pause-project-btn {
     padding: 6px 12px;
     border-radius: 6px;
     border: none;
@@ -322,6 +323,8 @@ body.theme-purple {
     font-size: 13px;
     font-weight: 500;
     transition: background-color 0.2s;
+    min-width: 70px;
+    text-align: center;
 }
 
 .analyze-project-btn {

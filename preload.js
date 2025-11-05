@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Study sessions
   saveStudySessions: (data) => ipcRenderer.invoke('save-study-sessions', data),
-  loadStudySessions: () => ipcRenderer.invoke('load-study-sessions')
+  loadStudySessions: () => ipcRenderer.invoke('load-study-sessions'),
+  
+  // Exit handling
+  checkUnfinishedFiles: () => ipcRenderer.invoke('check-unfinished-files'),
+  cleanupUnfinishedFiles: () => ipcRenderer.invoke('cleanup-unfinished-files'),
+  
+  // Debug logging to terminal
+  debugLog: (level, message, ...args) => ipcRenderer.invoke('renderer-debug-log', level, message, ...args)
 });
 

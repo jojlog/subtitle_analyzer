@@ -141,7 +141,34 @@
                         <button id="goBackBtn" class="go-back-btn" style="display: none;">Go Back</button>
                     </div>
                 </div>
-                <div id="savedAnalysesList" class="saved-list"></div>
+                
+                <!-- Inactive Saves Section (Processing/Paused/Queued) -->
+                <div id="inactiveSavesSection" class="inactive-saves-section">
+                    <div id="inactiveSavesList" class="inactive-saves-list"></div>
+                </div>
+                
+                <!-- Sortable Header for Active Saves -->
+                <div id="activeSavesHeader" class="active-saves-header" style="display: none;">
+                    <div class="sortable-header">
+                        <div class="sortable-column" data-sort="fileName">
+                            <span>File Name</span>
+                            <span class="sort-arrow">▼</span>
+                        </div>
+                        <div class="sortable-column" data-sort="dateEdited">
+                            <span>Date Edited</span>
+                            <span class="sort-arrow"></span>
+                        </div>
+                        <div class="sortable-column" data-sort="dateCreated">
+                            <span>Date Created</span>
+                            <span class="sort-arrow"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Active Saves Section (Completed) -->
+                <div id="activeSavesSection" class="active-saves-section">
+                    <div id="activeSavesList" class="active-saves-list"></div>
+                </div>
             </div>
 
             <!-- Settings View -->

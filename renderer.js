@@ -4,20 +4,98 @@ let currentChatHistory = [];
 let currentSubtitleData = null;
 let apiKey = null;
 let isAnalyzing = false;
+let shouldCancelAnalysis = false;
+let isPaused = false;
+let isProcessingQueue = false; // Lock flag for queue processing
+let progressUpdateTimeouts = []; // Array to store progress update timeout IDs for cleanup
+
+// Constants
+const PROGRESS_UPDATE_THRESHOLD = 25; // Update progress every 25% threshold
+
+// Unique ID generation: timestamp + counter to prevent collisions
+let idCounter = 0;
+function generateUniqueId() {
+    idCounter++;
+    return `${Date.now()}-${idCounter}-${Math.random().toString(36).substr(2, 9)}`;
+}
 
 // Multiple files support
 let fileProjects = []; // Array of { id, fileName, subtitleData, analysisData, status }
 let currentProjectId = null; // ID of currently selected/analyzing project
+let currentPlaceholderId = null; // ID of current placeholder in saved analyses
+
+// Expose fileProjects to window for IPC access - keep in sync automatically
+// Use a getter to always return the current array
+Object.defineProperty(window, 'fileProjects', {
+    get: () => fileProjects,
+    enumerable: true,
+    configurable: true
+});
 
 // Pagination state
 let currentPage = 1;
 let itemsPerPage = 50;
 
 // DOM elements (will be initialized when DOM is ready)
-let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, resultsSection, uploadSection;
+let uploadArea, fileInput, fileInfo, fileName, analyzeBtn, cancelBtn, resultsSection, uploadSection;
+
+// Debug logging helper
+function debugLog(operation, details = {}, level = 'info') {
+    const timestamp = new Date().toLocaleTimeString();
+    const prefix = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : '🔍';
+
+    // Log to browser console
+    console.log(`${prefix} [${timestamp}] ${operation}`, details);
+
+    // Send to terminal via IPC if available
+    if (window.electronAPI && window.electronAPI.debugLog) {
+        const detailsStr = typeof details === 'object' && details !== null 
+            ? JSON.stringify(details) 
+            : String(details);
+        window.electronAPI.debugLog(level, `${operation}`, detailsStr).catch(() => {
+            // Silently fail if IPC is not available
+        });
+    }
+
+    // Log to visible debug console if available
+    const debugMessages = document.getElementById('debugMessages');
+    if (debugMessages) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `debug-message ${level}`;
+
+        const timestampSpan = document.createElement('span');
+        timestampSpan.className = 'debug-timestamp';
+        timestampSpan.textContent = `[${timestamp}]`;
+
+        const operationSpan = document.createElement('span');
+        operationSpan.className = 'debug-operation';
+        operationSpan.textContent = `${prefix} ${operation}`;
+
+        const detailsSpan = document.createElement('span');
+        detailsSpan.className = 'debug-details';
+        detailsSpan.textContent = JSON.stringify(details, null, 2);
+
+        messageDiv.appendChild(timestampSpan);
+        messageDiv.appendChild(operationSpan);
+        messageDiv.appendChild(detailsSpan);
+
+        debugMessages.appendChild(messageDiv);
+
+        // Auto-scroll to bottom
+        debugMessages.scrollTop = debugMessages.scrollHeight;
+
+        // Limit messages to prevent memory issues (keep last 200)
+        while (debugMessages.children.length > 200) {
+            debugMessages.removeChild(debugMessages.firstChild);
+        }
+    }
+}
 let fileProjectsList; // Container for multiple file projects list
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
+let inactiveSavesSection, inactiveSavesList, activeSavesSection, activeSavesList, activeSavesHeader;
+let currentSortColumn = 'dateEdited'; // Default sort by dateEdited
+let currentSortDirection = 'desc'; // Default descending (newest first)
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
 let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn;
@@ -104,33 +182,62 @@ async function applyTheme(theme) {
     }
 }
 
-// OpenAI API call function
-async function callOpenAI(messages, model = 'gpt-4o-mini') {
+// OpenAI API call function with rate limit handling
+async function callOpenAI(messages, model = 'gpt-4o-mini', retryCount = 0) {
     if (!apiKey) {
         throw new Error('API key not set');
     }
     
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: messages,
-                temperature: 0.7,
-            max_tokens: 16000  // Increased from 4000 to allow larger responses and reduce API calls
-            })
-        });
+    const MAX_RETRIES = 3;
+    const BASE_DELAY = 1000; // 1 second base delay
+    
+    try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: messages,
+                    temperature: 0.7,
+                max_tokens: 16000  // Increased from 4000 to allow larger responses and reduce API calls
+                })
+            });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error?.message || 'API request failed');
+        if (!response.ok) {
+            const error = await response.json();
+            const errorMessage = error.error?.message || 'API request failed';
+            const statusCode = response.status;
+            
+            // Handle rate limiting (429) with exponential backoff
+            if (statusCode === 429 && retryCount < MAX_RETRIES) {
+                const retryAfter = response.headers.get('retry-after');
+                const delay = retryAfter 
+                    ? parseInt(retryAfter) * 1000 
+                    : BASE_DELAY * Math.pow(2, retryCount);
+                
+                console.log(`Rate limited. Retrying after ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return callOpenAI(messages, model, retryCount + 1);
+            }
+            
+            throw new Error(errorMessage);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content;
+    } catch (error) {
+        // Retry on network errors with exponential backoff
+        if (retryCount < MAX_RETRIES && !error.message.includes('API key')) {
+            const delay = BASE_DELAY * Math.pow(2, retryCount);
+            console.log(`Network error. Retrying after ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return callOpenAI(messages, model, retryCount + 1);
+        }
+        throw error;
     }
-
-    const data = await response.json();
-    return data.choices[0].message.content;
 }
 
 // Helper function to check if text is valid subtitle dialogue (not metadata)
@@ -544,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInfo = document.getElementById('fileInfo');
     fileName = document.getElementById('fileName');
     analyzeBtn = document.getElementById('analyzeBtn');
+    cancelBtn = document.getElementById('cancelBtn');
     fileProjectsList = document.getElementById('fileProjectsList');
     resultsSection = document.getElementById('resultsSection');
     uploadSection = document.getElementById('uploadSection');
@@ -558,6 +666,11 @@ document.addEventListener('DOMContentLoaded', () => {
     savedAnalysesBtn = document.getElementById('savedAnalysesBtn');
     savedAnalysesView = document.getElementById('savedAnalysesView');
     savedAnalysesList = document.getElementById('savedAnalysesList');
+    inactiveSavesSection = document.getElementById('inactiveSavesSection');
+    inactiveSavesList = document.getElementById('inactiveSavesList');
+    activeSavesSection = document.getElementById('activeSavesSection');
+    activeSavesList = document.getElementById('activeSavesList');
+    activeSavesHeader = document.getElementById('activeSavesHeader');
     editSavedBtn = document.getElementById('editSavedBtn');
     goBackBtn = document.getElementById('goBackBtn');
     settingsBtn = document.getElementById('settingsBtn');
@@ -582,6 +695,17 @@ document.addEventListener('DOMContentLoaded', () => {
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
     themeSelect = document.getElementById('themeSelect');
 
+    // Debug console elements
+    const debugBtn = document.getElementById('debugBtn');
+    const debugConsole = document.getElementById('debugConsole');
+    const clearDebugBtn = document.getElementById('clearDebugBtn');
+    const closeDebugBtn = document.getElementById('closeDebugBtn');
+
+    debugLog('🎯 DEBUG SYSTEM INITIALIZED', {
+        debugConsoleAvailable: !!debugConsole,
+        debugBtnAvailable: !!debugBtn
+    });
+
     console.log('DOM elements initialized', {
         uploadArea: !!uploadArea,
         settingsBtn: !!settingsBtn,
@@ -591,6 +715,11 @@ document.addEventListener('DOMContentLoaded', () => {
         themeSelect: !!themeSelect
     });
     
+    // Initialize API key (loads from .env or encrypted storage)
+    initializeAPIKey().catch(err => {
+        console.error('Error initializing API key:', err);
+    });
+    
     // Initialize theme
     initializeTheme().catch(err => {
         console.error('Error initializing theme:', err);
@@ -598,24 +727,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
+        debugLog('🏠 NAVIGATING TO HOME', {
+            isAnalyzing: isAnalyzing,
+            currentView: isAnalyzing ? 'analysis_progress' : 'home_reset',
+            hasCurrentAnalysis: !!currentAnalysis,
+            projectCount: fileProjects.length
+        });
+
         // Close any open modals/views
         studyModal.style.display = 'none';
         savedAnalysesView.style.display = 'none';
         settingsView.style.display = 'none';
-        
+
         // If analysis is in progress, preserve data and show progress
         if (isAnalyzing) {
-            // Show upload section with file info to display progress
+            debugLog('📊 PRESERVING ANALYSIS PROGRESS VIEW', {
+                currentProjectId: currentProjectId,
+                paused: isPaused
+            });
+            // Show upload section - progress is shown in file list, not in fileInfo
             uploadSection.style.display = 'flex';
-            if (fileInfo) {
-                fileInfo.style.display = 'flex';
-            }
+            fileInfo.style.display = 'none'; // Keep hidden - status shown in file list
             resultsSection.style.display = 'none';
             chatSection.style.display = 'none';
             // Don't reset data - analysis needs it to continue
             return;
         }
-        
+
+        debugLog('🔄 RESETTING TO HOME VIEW', {
+            resettingData: true,
+            clearingAnalysis: !!currentAnalysis
+        });
         // Reset to home/upload view (only when not analyzing)
         uploadSection.style.display = 'flex';
         resultsSection.style.display = 'none';
@@ -658,8 +800,19 @@ document.addEventListener('DOMContentLoaded', () => {
             return fileName.endsWith('.vtt') || fileName.endsWith('.txt');
         });
         
+        // Check upload limit before processing
+        if (fileProjects.length >= 5) {
+            alert('You can upload up to 5 files only.');
+            return;
+        }
+        
         if (validFiles.length > 0) {
             for (const file of validFiles) {
+                // Check limit before each file (in case multiple files dropped)
+                if (fileProjects.length >= 5) {
+                    alert('You can upload up to 5 files only.');
+                    break;
+                }
                 await handleFileSelect(file);
             }
         } else if (files.length > 0) {
@@ -675,8 +828,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 return fileName.endsWith('.vtt') || fileName.endsWith('.txt');
             });
             
+            // Check upload limit before processing
+            if (fileProjects.length >= 5) {
+                alert('You can upload up to 5 files only.');
+                e.target.value = '';
+                return;
+            }
+            
             if (validFiles.length > 0) {
                 for (const file of validFiles) {
+                    // Check limit before each file (in case multiple files selected)
+                    if (fileProjects.length >= 5) {
+                        alert('You can upload up to 5 files only.');
+                        break;
+                    }
                     await handleFileSelect(file);
                 }
             } else {
@@ -689,23 +854,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function handleFileSelect(file) {
     try {
-        console.log('handleFileSelect called with file:', file.name, 'size:', file.size);
-        
+        debugLog('📁 FILE UPLOAD STARTED', {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            lastModified: new Date(file.lastModified).toISOString()
+        });
+
+        // Check upload limit (maximum 5 files)
+        if (fileProjects.length >= 5) {
+            debugLog('❌ FILE UPLOAD FAILED', { 
+                reason: 'Upload limit reached', 
+                currentCount: fileProjects.length,
+                maxCount: 5
+            }, 'error');
+            alert('You can upload up to 5 files only.');
+            return;
+        }
+
         // Validate file
         if (!file) {
+            debugLog('❌ FILE UPLOAD FAILED', { reason: 'No file selected' }, 'error');
             alert('No file selected.');
             return;
         }
         
         // Use FileReader API for both drag-and-drop and file input
+        debugLog('📖 FILE READING STARTED', { fileName: file.name });
         const content = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                console.log('File read successfully, content length:', e.target.result.length);
+                debugLog('📖 FILE READING COMPLETED', {
+                    fileName: file.name,
+                    contentLength: e.target.result.length,
+                    contentPreview: e.target.result.substring(0, 100) + '...'
+                }, 'success');
                 resolve(e.target.result);
             };
             reader.onerror = (error) => {
-                console.error('FileReader error:', error);
+                debugLog('❌ FILE READING FAILED', { fileName: file.name, error: error.message }, 'error');
                 reject(error);
             };
             // Explicitly specify UTF-8 encoding to prevent Swedish characters from being broken
@@ -714,35 +901,87 @@ async function handleFileSelect(file) {
         
         // Fix encoding issues before parsing (in case file was already corrupted)
         const fixedContent = fixEncoding(content);
-        
+        debugLog('🔧 ENCODING FIXED', {
+            fileName: file.name,
+            originalLength: content.length,
+            fixedLength: fixedContent.length,
+            encodingChanged: content !== fixedContent
+        });
+
         // Detect file type and use appropriate parser (case-insensitive)
         const fileNameLower = file.name.toLowerCase();
         let subtitleData = null;
-        
+
+        debugLog('🔍 FILE PARSING STARTED', {
+            fileName: file.name,
+            fileType: fileNameLower.endsWith('.vtt') ? 'VTT' : 'TXT'
+        });
+
         if (fileNameLower.endsWith('.vtt')) {
             subtitleData = parseVTT(fixedContent);
-            console.log('Parsed VTT file, subtitle count:', subtitleData ? subtitleData.length : 0);
+            debugLog('🎬 VTT PARSING COMPLETED', {
+                fileName: file.name,
+                subtitleCount: subtitleData ? subtitleData.length : 0
+            }, 'success');
         } else if (fileNameLower.endsWith('.txt')) {
             subtitleData = parseTXT(fixedContent);
-            console.log('Parsed TXT file, subtitle count:', subtitleData ? subtitleData.length : 0);
+            debugLog('📄 TXT PARSING COMPLETED', {
+                fileName: file.name,
+                subtitleCount: subtitleData ? subtitleData.length : 0
+            }, 'success');
         } else {
+            debugLog('❌ UNSUPPORTED FILE TYPE', { fileName: file.name, fileType: fileNameLower }, 'error');
             alert('Unsupported file type. Please upload a .vtt or .txt file.');
             return;
         }
         
         // Ensure we have valid data
         if (!subtitleData || subtitleData.length === 0) {
+            debugLog('❌ EMPTY OR INVALID SUBTITLE DATA', {
+                fileName: file.name,
+                subtitleDataLength: subtitleData ? subtitleData.length : 0
+            }, 'error');
             alert(`The file "${file.name}" appears to be empty or could not be parsed. Please check the file contains text and try again.`);
             return;
         }
-        
-        // Check if file already exists
+
+        // Check if file already exists - prevent duplicates
+        // Don't remove if currently analyzing - update existing instead
         const existingProject = fileProjects.find(p => p.fileName === file.name);
         if (existingProject) {
-            // Update existing project
-            existingProject.subtitleData = subtitleData;
-            existingProject.status = 'ready';
-            existingProject.analysisData = null;
+            debugLog('📁 EXISTING PROJECT FOUND', {
+                fileName: file.name,
+                projectId: existingProject.id,
+                currentStatus: existingProject.status,
+                willUpdate: existingProject.status !== 'analyzing'
+            });
+
+            // If not analyzing, update existing project
+            if (existingProject.status !== 'analyzing') {
+                existingProject.subtitleData = subtitleData;
+                existingProject.status = 'ready';
+                existingProject.analysisData = null;
+                // Preserve batch tracking fields if they exist, otherwise initialize
+                if (existingProject.currentBatchIndex === undefined) {
+                    existingProject.currentBatchIndex = 0;
+                    existingProject.processedBatches = [];
+                    existingProject.pausedAt = null;
+                }
+                if (existingProject.progress === undefined) {
+                    existingProject.progress = 0;
+                }
+                debugLog('🔄 EXISTING PROJECT UPDATED', {
+                    projectId: existingProject.id,
+                    fileName: file.name,
+                    newStatus: 'ready'
+                });
+            } else {
+                debugLog('⏳ EXISTING PROJECT PRESERVED', {
+                    projectId: existingProject.id,
+                    fileName: file.name,
+                    status: 'analyzing (preserved)'
+                });
+            }
         } else {
             // Add new project
             const projectId = 'project-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -751,22 +990,41 @@ async function handleFileSelect(file) {
                 fileName: file.name,
                 subtitleData: subtitleData,
                 analysisData: null,
-                status: 'ready' // ready, analyzing, completed, error
+                status: 'ready', // ready, queued, analyzing, paused, completed, error
+                progress: 0,
+                currentBatchIndex: 0,
+                processedBatches: [],
+                pausedAt: null
+            });
+            // window.fileProjects is auto-synced via getter
+            debugLog('➕ NEW PROJECT CREATED', {
+                projectId: projectId,
+                fileName: file.name,
+                status: 'ready',
+                totalProjects: fileProjects.length
             });
         }
         
         // Render the file projects list
         renderFileProjectsList();
-        
+
         // Reset state
         currentAnalysis = null;
         currentChatHistory = [];
         resultsSection.style.display = 'none';
         chatSection.style.display = 'none';
-        
-        console.log('File processed successfully, ready for analysis');
+
+        debugLog('✅ FILE UPLOAD COMPLETED', {
+            fileName: file.name,
+            projectCount: fileProjects.length,
+            readyForAnalysis: true
+        }, 'success');
     } catch (error) {
-        console.error('Error reading file:', error);
+        debugLog('❌ FILE UPLOAD ERROR', {
+            fileName: file?.name || 'unknown',
+            error: error.message || 'Unknown error',
+            stack: error.stack
+        }, 'error');
         alert('Error reading file: ' + (error.message || 'Please try again.'));
         currentSubtitleData = null;
         fileInfo.style.display = 'none';
@@ -794,12 +1052,259 @@ function formatTimeRemaining(seconds) {
     }
 }
 
+// Process a single batch with all its logic
+async function processSingleBatch(batch, batchIndex, globalEntryIndexStart, totalBatches) {
+    const batchNumber = batchIndex + 1;
+    const batchStartTime = Date.now();
+    
+    try {
+        // Format batch text with numbered entries (using global index)
+        let globalEntryIndex = globalEntryIndexStart;
+        const batchText = batch.map((cue, idx) => {
+            const entryNumber = globalEntryIndex + 1;
+            globalEntryIndex++;
+            return `${entryNumber}. ${cue.text}`;
+        }).join('\n');
+        
+        const batchPrompt = `Translate ALL ${batch.length} Swedish subtitle entries below. Return JSON with "translations" array containing exactly ${batch.length} entries.
+
+IMPORTANT: Extract important Swedish words and expressions from the entries. For each expression, assign a CEFR level (A1, A2, B1, B2, C1, C2, or C3) based on the difficulty/complexity of the word or expression.
+
+Format:
+{
+  "translations": [
+    {"swedish": "text", "literal": "translation", "natural": "natural translation (if different)"}
+  ],
+  "expressions": [
+    {"word": "word", "meaning": "meaning", "example": "example", "level": "A1"}
+  ]
+}
+
+CEFR Level Guidelines:
+- A1: Very basic words (hello, yes, no, numbers, simple verbs)
+- A2: Basic everyday words (common verbs, nouns, simple phrases)
+- B1: Intermediate words (common expressions, moderate complexity)
+- B2: Upper-intermediate words (more complex expressions, idioms)
+- C1: Advanced words (sophisticated vocabulary, complex phrases)
+- C2: Very advanced words (near-native level, nuanced expressions)
+- C3: Expert level (highly specialized or literary language)
+
+Extract MORE expressions - aim for 5-15 important words/expressions per batch. Include verbs, nouns, adjectives, phrases, and idiomatic expressions that would be useful for learning Swedish.
+
+Entries:
+${batchText}`;
+
+        const messages = [
+            {
+                role: 'system',
+                content: 'You are a Swedish-English translator. Translate ALL entries. Return JSON only.'
+            },
+            {
+                role: 'user',
+                content: batchPrompt
+            }
+        ];
+
+        const content = await callOpenAI(messages);
+        
+        // Parse batch response
+        let batchData;
+        try {
+            const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+            if (jsonMatch) {
+                batchData = JSON.parse(jsonMatch[1]);
+            } else {
+                batchData = JSON.parse(content);
+            }
+            
+            // Fix encoding for all translations and expressions in batch
+            if (batchData.translations && Array.isArray(batchData.translations)) {
+                batchData.translations = batchData.translations.map(t => fixTranslationEncoding(t));
+            }
+            if (batchData.expressions && Array.isArray(batchData.expressions)) {
+                batchData.expressions = batchData.expressions.map(e => fixTranslationEncoding(e));
+            }
+        } catch (e) {
+            console.error(`Error parsing batch ${batchNumber}:`, e);
+            // Create empty batch data on parse error
+            batchData = {
+                translations: [],
+                expressions: []
+            };
+        }
+        
+        // Validate batch got all translations
+        const expectedTranslations = batch.length;
+        const receivedTranslations = batchData.translations ? batchData.translations.length : 0;
+        
+        if (receivedTranslations < expectedTranslations) {
+            console.warn(`Batch ${batchNumber}: Expected ${expectedTranslations} translations, got ${receivedTranslations}`);
+            // Try to translate missing entries
+            if (batchData.translations && receivedTranslations > 0) {
+                const translatedSwedishTexts = batchData.translations.map(t => t.swedish).filter(Boolean);
+                
+                const missingEntries = batch.filter(cue => {
+                    const cueText = cue.text || '';
+                    if (!cueText.trim()) return false;
+                    
+                    // Check if this entry was translated using improved matching
+                    const wasTranslated = translatedSwedishTexts.some(translated => 
+                        textsMatch(translated, cueText)
+                    );
+                    return !wasTranslated;
+                });
+                
+                if (missingEntries.length > 0) {
+                    console.log(`Batch ${batchNumber}: Attempting to translate ${missingEntries.length} missing entries...`);
+                    try {
+                        const missingText = missingEntries.map((cue, idx) => 
+                            `${receivedTranslations + idx + 1}. ${cue.text}`
+                        ).join('\n');
+                        
+                        const missingPrompt = `Translate ${missingEntries.length} Swedish entries. Return JSON array:
+[{"swedish":"text","literal":"translation","natural":"natural (if different)"}]
+
+Entries:
+${missingText}`;
+                        
+                        const missingContent = await callOpenAI([
+                            {
+                                role: 'system',
+                                content: 'Swedish-English translator. Translate ALL entries. Return JSON only.'
+                            },
+                            {
+                                role: 'user',
+                                content: missingPrompt
+                            }
+                        ]);
+                        
+                        try {
+                            const missingJsonMatch = missingContent.match(/```(?:json)?\s*(\[[\s\S]*\])\s*```/);
+                            const missingJson = missingJsonMatch ? missingJsonMatch[1] : missingContent;
+                            const missingTranslations = JSON.parse(missingJson);
+                            
+                            if (Array.isArray(missingTranslations) && missingTranslations.length > 0) {
+                                // Fix encoding for all missing translations
+                                const fixedMissing = missingTranslations.map(t => fixTranslationEncoding(t));
+                                
+                                // Check for duplicates before adding
+                                const existingSwedishTexts = new Set((batchData.translations || []).map(t => normalizeTextForMatching(t.swedish || '')));
+                                const newTranslations = fixedMissing.filter(t => {
+                                    const normalizedSwedish = normalizeTextForMatching(t.swedish || '');
+                                    if (existingSwedishTexts.has(normalizedSwedish)) {
+                                        return false; // Skip duplicate
+                                    }
+                                    existingSwedishTexts.add(normalizedSwedish);
+                                    return true;
+                                });
+                                
+                                if (newTranslations.length > 0) {
+                                    batchData.translations.push(...newTranslations);
+                                    console.log(`Batch ${batchNumber}: Added ${newTranslations.length} missing translations (${fixedMissing.length - newTranslations.length} duplicates skipped)`);
+                                }
+                            }
+                        } catch (parseError) {
+                            console.error(`Batch ${batchNumber}: Failed to parse missing translations:`, parseError);
+                        }
+                    } catch (missingError) {
+                        console.error(`Batch ${batchNumber}: Failed to get missing translations:`, missingError);
+                    }
+                }
+            }
+            
+            // Only create placeholders for entries that truly don't have translations
+            const finalCount = batchData.translations ? batchData.translations.length : 0;
+            if (finalCount < expectedTranslations) {
+                const translatedSwedishTexts = (batchData.translations || []).map(t => t.swedish).filter(Boolean);
+                
+                for (const cue of batch) {
+                    const cueText = cue.text || '';
+                    if (!cueText.trim()) continue;
+                    
+                    // Check if this entry was translated using improved matching
+                    const exists = translatedSwedishTexts.some(translated => 
+                        textsMatch(translated, cueText)
+                    );
+                    
+                    if (!exists && isValidSubtitleText(cueText)) {
+                        // Only create placeholder for valid subtitle text that truly wasn't translated
+                        if (!batchData.translations) {
+                            batchData.translations = [];
+                        }
+                        
+                        // Check if this placeholder would be a duplicate
+                        const normalizedCueText = normalizeTextForMatching(cueText);
+                        const alreadyHasPlaceholder = batchData.translations.some(t => 
+                            normalizeTextForMatching(t.swedish || '') === normalizedCueText
+                        );
+                        
+                        if (!alreadyHasPlaceholder) {
+                            batchData.translations.push(fixTranslationEncoding({
+                                swedish: cue.text,
+                                literal: `[Translation needed: ${cue.text}]`,
+                                natural: null
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Deduplicate translations within this batch before adding to results
+        if (batchData.translations && batchData.translations.length > 0) {
+            const batchTranslationsMap = new Map();
+            batchData.translations.forEach(trans => {
+                if (trans.swedish) {
+                    const normalizedKey = normalizeTextForMatching(trans.swedish);
+                    // Keep the first occurrence, or replace placeholder with actual translation
+                    if (!batchTranslationsMap.has(normalizedKey)) {
+                        batchTranslationsMap.set(normalizedKey, trans);
+                    } else {
+                        const existing = batchTranslationsMap.get(normalizedKey);
+                        // Replace placeholder with actual translation if we have one
+                        if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
+                            if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
+                                batchTranslationsMap.set(normalizedKey, trans);
+                            }
+                        }
+                    }
+                }
+            });
+            batchData.translations = Array.from(batchTranslationsMap.values());
+        }
+        
+        // Record batch processing time
+        const batchEndTime = Date.now();
+        const batchDuration = batchEndTime - batchStartTime;
+        
+        console.log(`Batch ${batchNumber}/${totalBatches} complete: ${batchData.translations?.length || 0} translations (took ${(batchDuration / 1000).toFixed(1)}s)`);
+        
+        return {
+            batchData,
+            batchIndex,
+            batchDuration
+        };
+        
+    } catch (error) {
+        console.error(`Error processing batch ${batchNumber}:`, error);
+        // Return empty batch data on error
+        return {
+            batchData: {
+                translations: [],
+                expressions: []
+            },
+            batchIndex,
+            batchDuration: 0
+        };
+    }
+}
+
 // Process subtitle entries in batches to handle large files
 async function processSubtitleBatches(subtitleData, placeholderId = null) {
     const BATCH_SIZE_ENTRIES = 300; // Reduced to prevent timeout - smaller batches process faster
     const MAX_CHARS_PER_BATCH = 12000; // Reduced to prevent timeout - smaller prompts are faster
+    const CONCURRENT_BATCHES = 3; // Process 3 batches in parallel
     const batches = [];
-    const results = [];
     
     // Split into batches based on entry count and character count
     let currentBatch = [];
@@ -831,6 +1336,10 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
     
     console.log(`Split ${subtitleData.length} entries into ${batches.length} batches`);
     
+    // Get current project to track batch index
+    const project = fileProjects.find(p => p.id === currentProjectId);
+    const startBatchIndex = project && project.currentBatchIndex ? project.currentBatchIndex : 0;
+    
     // Time tracking for estimation
     const batchTimes = [];
     const startTime = Date.now();
@@ -839,272 +1348,168 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
     const ESTIMATED_SECONDS_PER_BATCH = 4;
     const initialEstimatedSeconds = batches.length * ESTIMATED_SECONDS_PER_BATCH;
     
-    // Process each batch sequentially
+    // Calculate global entry index for each batch (for numbering)
     let globalEntryIndex = 0;
-    let lastProgressUpdate = -1; // Track last progress percentage updated
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
-        const batchNumber = batchIndex + 1;
-        const batchStartTime = Date.now();
-        
-        // Calculate estimated remaining time
-        let timeRemainingText = '';
-        if (batchIndex === 0) {
-            // First batch: use initial estimate
-            timeRemainingText = ` • ${formatTimeRemaining(initialEstimatedSeconds)} remaining`;
-        } else if (batchTimes.length > 0) {
-            // Calculate average time per batch based on completed batches
-            const avgTimePerBatch = batchTimes.reduce((sum, time) => sum + time, 0) / batchTimes.length;
-            const remainingBatches = batches.length - batchIndex;
-            const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
-            timeRemainingText = ` • ${formatTimeRemaining(estimatedSecondsRemaining)} remaining`;
+    const batchEntryIndices = batches.map(batch => {
+        const startIndex = globalEntryIndex;
+        globalEntryIndex += batch.length;
+        return startIndex;
+    });
+    
+    // Results array with placeholders to maintain order
+    const results = new Array(batches.length);
+    let completedCount = startBatchIndex; // Start from saved batch index if resuming
+    
+    // Restore processed batches if resuming
+    if (startBatchIndex > 0 && project && project.processedBatches && project.processedBatches.length > 0) {
+        for (let i = 0; i < Math.min(startBatchIndex, project.processedBatches.length); i++) {
+            results[i] = project.processedBatches[i];
+        }
+    }
+    
+    let lastProgressUpdate = -1;
+    
+    // Status is already set to 'analyzing' in analyzeProject before calling this function
+    // Just render - no need to deduplicate here as we're only updating existing entries
+    renderFileProjectsList();
+    
+    // Process batches in parallel groups of CONCURRENT_BATCHES
+    // Start from saved batch index if resuming
+    for (let i = startBatchIndex; i < batches.length; i += CONCURRENT_BATCHES) {
+        // Check for cancellation before processing next batch group
+        if (shouldCancelAnalysis) {
+            console.log('Analysis cancelled by user');
+            break;
         }
         
-        // Update button text to show progress and time estimate
-        analyzeBtn.textContent = `Analyzing... (Batch ${batchNumber}/${batches.length}${timeRemainingText})`;
-        
-        // Update project status in list if we have a current project
-        if (currentProjectId) {
-            const project = fileProjects.find(p => p.id === currentProjectId);
+        // Wait if paused - poll until resume
+        while (isPaused && !shouldCancelAnalysis) {
+            // Save pause state atomically - update all fields together
             if (project) {
-                project.status = 'analyzing';
-                renderFileProjectsList();
+                // Update all pause state fields atomically to prevent inconsistent state
+                const pauseState = {
+                    currentBatchIndex: i,
+                    progress: Math.round((completedCount / batches.length) * 100),
+                    processedBatches: results.slice(0, completedCount).filter(Boolean),
+                    pausedAt: new Date().toISOString()
+                };
+                
+                // Apply all updates at once
+                Object.assign(project, pauseState);
+                
+                debugLog('⏸️ PAUSE STATE SAVED', {
+                    projectId: project.id,
+                    fileName: project.fileName,
+                    currentBatchIndex: pauseState.currentBatchIndex,
+                    progress: pauseState.progress,
+                    processedBatchesCount: pauseState.processedBatches.length
+                });
             }
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
         
-        try {
-            // Format batch text with numbered entries (using global index)
-            const batchText = batch.map((cue, idx) => {
-                const entryNumber = globalEntryIndex + 1;
-                globalEntryIndex++;
-                return `${entryNumber}. ${cue.text}`;
-            }).join('\n');
+        // Check again after pause check
+        if (shouldCancelAnalysis) {
+            console.log('Analysis cancelled by user');
+            break;
+        }
+        
+        // Update current batch index after checking pause
+        if (project) {
+            project.currentBatchIndex = i;
+        }
+        
+        const batchGroup = batches.slice(i, i + CONCURRENT_BATCHES);
+        const batchGroupIndices = batchGroup.map((_, groupIdx) => i + groupIdx);
+        
+        // Process all batches in this group in parallel
+        const groupPromises = batchGroup.map((batch, groupIdx) => {
+            const batchIndex = i + groupIdx;
+            const globalEntryIndexStart = batchEntryIndices[batchIndex];
+            return processSingleBatch(batch, batchIndex, globalEntryIndexStart, batches.length);
+        });
+        
+        // Wait for all batches in this group to complete
+        const groupResults = await Promise.all(groupPromises);
+        
+        // Store results in correct order and update progress
+        for (const result of groupResults) {
+            results[result.batchIndex] = result.batchData;
+            batchTimes.push(result.batchDuration);
+            completedCount++;
             
-            const batchPrompt = `Translate ALL ${batch.length} Swedish subtitle entries below. Return JSON with "translations" array containing exactly ${batch.length} entries.
-
-IMPORTANT: Extract important Swedish words and expressions from the entries. For each expression, assign a CEFR level (A1, A2, B1, B2, C1, C2, or C3) based on the difficulty/complexity of the word or expression.
-
-Format:
-{
-  "translations": [
-    {"swedish": "text", "literal": "translation", "natural": "natural translation (if different)"}
-  ],
-  "expressions": [
-    {"word": "word", "meaning": "meaning", "example": "example", "level": "A1"}
-  ]
-}
-
-CEFR Level Guidelines:
-- A1: Very basic words (hello, yes, no, numbers, simple verbs)
-- A2: Basic everyday words (common verbs, nouns, simple phrases)
-- B1: Intermediate words (common expressions, moderate complexity)
-- B2: Upper-intermediate words (more complex expressions, idioms)
-- C1: Advanced words (sophisticated vocabulary, complex phrases)
-- C2: Very advanced words (near-native level, nuanced expressions)
-- C3: Expert level (highly specialized or literary language)
-
-Extract MORE expressions - aim for 5-15 important words/expressions per batch. Include verbs, nouns, adjectives, phrases, and idiomatic expressions that would be useful for learning Swedish.
-
-Entries:
-${batchText}`;
-
-            const messages = [
-                {
-                    role: 'system',
-                    content: 'You are a Swedish-English translator. Translate ALL entries. Return JSON only.'
-                },
-                {
-                    role: 'user',
-                    content: batchPrompt
-                }
-            ];
-
-            const content = await callOpenAI(messages);
+            // Update progress tracking
+            const batchNumber = result.batchIndex + 1;
             
-            // Parse batch response
-            let batchData;
-            try {
-                const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
-                if (jsonMatch) {
-                    batchData = JSON.parse(jsonMatch[1]);
-                } else {
-                    batchData = JSON.parse(content);
-                }
-                
-                // Fix encoding for all translations and expressions in batch
-                if (batchData.translations && Array.isArray(batchData.translations)) {
-                    batchData.translations = batchData.translations.map(t => fixTranslationEncoding(t));
-                }
-                if (batchData.expressions && Array.isArray(batchData.expressions)) {
-                    batchData.expressions = batchData.expressions.map(e => fixTranslationEncoding(e));
-                }
-            } catch (e) {
-                console.error(`Error parsing batch ${batchNumber}:`, e);
-                // Create empty batch data on parse error
-                batchData = {
-                    translations: [],
-                    expressions: []
-                };
+            // Calculate and update progress
+            const progress = Math.round((completedCount / batches.length) * 100);
+            
+            // Update project progress
+            if (project) {
+                project.progress = progress;
+                project.currentBatchIndex = result.batchIndex + 1; // Next batch to process
+                // Save processed batches so far
+                project.processedBatches = results.slice(0, completedCount).filter(Boolean);
             }
             
-            // Validate batch got all translations
-            const expectedTranslations = batch.length;
-            const receivedTranslations = batchData.translations ? batchData.translations.length : 0;
-            
-            if (receivedTranslations < expectedTranslations) {
-                console.warn(`Batch ${batchNumber}: Expected ${expectedTranslations} translations, got ${receivedTranslations}`);
-                // Try to translate missing entries
-                if (batchData.translations && receivedTranslations > 0) {
-                    const translatedSwedishTexts = batchData.translations.map(t => t.swedish).filter(Boolean);
-                    
-                    const missingEntries = batch.filter(cue => {
-                        const cueText = cue.text || '';
-                        if (!cueText.trim()) return false;
-                        
-                        // Check if this entry was translated using improved matching
-                        const wasTranslated = translatedSwedishTexts.some(translated => 
-                            textsMatch(translated, cueText)
-                        );
-                        return !wasTranslated;
-                    });
-                    
-                    if (missingEntries.length > 0) {
-                        console.log(`Batch ${batchNumber}: Attempting to translate ${missingEntries.length} missing entries...`);
-                        try {
-                            const missingText = missingEntries.map((cue, idx) => 
-                                `${receivedTranslations + idx + 1}. ${cue.text}`
-                            ).join('\n');
-                            
-                            const missingPrompt = `Translate ${missingEntries.length} Swedish entries. Return JSON array:
-[{"swedish":"text","literal":"translation","natural":"natural (if different)"}]
-
-Entries:
-${missingText}`;
-                            
-                            const missingContent = await callOpenAI([
-                                {
-                                    role: 'system',
-                                    content: 'Swedish-English translator. Translate ALL entries. Return JSON only.'
-                                },
-                                {
-                                    role: 'user',
-                                    content: missingPrompt
-                                }
-                            ]);
-                            
-                            try {
-                                const missingJsonMatch = missingContent.match(/```(?:json)?\s*(\[[\s\S]*\])\s*```/);
-                                const missingJson = missingJsonMatch ? missingJsonMatch[1] : missingContent;
-                                const missingTranslations = JSON.parse(missingJson);
-                                
-                                if (Array.isArray(missingTranslations) && missingTranslations.length > 0) {
-                                    // Fix encoding for all missing translations
-                                    const fixedMissing = missingTranslations.map(t => fixTranslationEncoding(t));
-                                    
-                                    // Check for duplicates before adding
-                                    const existingSwedishTexts = new Set((batchData.translations || []).map(t => normalizeTextForMatching(t.swedish || '')));
-                                    const newTranslations = fixedMissing.filter(t => {
-                                        const normalizedSwedish = normalizeTextForMatching(t.swedish || '');
-                                        if (existingSwedishTexts.has(normalizedSwedish)) {
-                                            return false; // Skip duplicate
-                                        }
-                                        existingSwedishTexts.add(normalizedSwedish);
-                                        return true;
-                                    });
-                                    
-                                    if (newTranslations.length > 0) {
-                                        batchData.translations.push(...newTranslations);
-                                        console.log(`Batch ${batchNumber}: Added ${newTranslations.length} missing translations (${fixedMissing.length - newTranslations.length} duplicates skipped)`);
-                                    }
-                                }
-                            } catch (parseError) {
-                                console.error(`Batch ${batchNumber}: Failed to parse missing translations:`, parseError);
-                            }
-                        } catch (missingError) {
-                            console.error(`Batch ${batchNumber}: Failed to get missing translations:`, missingError);
-                        }
-                    }
-                }
-                
-                // Only create placeholders for entries that truly don't have translations
-                const finalCount = batchData.translations ? batchData.translations.length : 0;
-                if (finalCount < expectedTranslations) {
-                    const translatedSwedishTexts = (batchData.translations || []).map(t => t.swedish).filter(Boolean);
-                    
-                    for (const cue of batch) {
-                        const cueText = cue.text || '';
-                        if (!cueText.trim()) continue;
-                        
-                        // Check if this entry was translated using improved matching
-                        const exists = translatedSwedishTexts.some(translated => 
-                            textsMatch(translated, cueText)
-                        );
-                        
-                        if (!exists && isValidSubtitleText(cueText)) {
-                            // Only create placeholder for valid subtitle text that truly wasn't translated
-                            if (!batchData.translations) {
-                                batchData.translations = [];
-                            }
-                            
-                            // Check if this placeholder would be a duplicate
-                            const normalizedCueText = normalizeTextForMatching(cueText);
-                            const alreadyHasPlaceholder = batchData.translations.some(t => 
-                                normalizeTextForMatching(t.swedish || '') === normalizedCueText
-                            );
-                            
-                            if (!alreadyHasPlaceholder) {
-                                batchData.translations.push(fixTranslationEncoding({
-                                    swedish: cue.text,
-                                    literal: `[Translation needed: ${cue.text}]`,
-                                    natural: null
-                                }));
-                            }
-                        }
-                    }
-                }
+            // Calculate estimated remaining time
+            let timeRemainingText = '';
+            if (completedCount === 1) {
+                // First batch: use initial estimate
+                timeRemainingText = ` • ${formatTimeRemaining(initialEstimatedSeconds)} remaining`;
+            } else if (batchTimes.length > 0) {
+                // Calculate average time per batch based on completed batches
+                const avgTimePerBatch = batchTimes.reduce((sum, time) => sum + time, 0) / batchTimes.length;
+                const remainingBatches = batches.length - completedCount;
+                const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
+                timeRemainingText = ` • ${formatTimeRemaining(estimatedSecondsRemaining)} remaining`;
             }
             
-            // Deduplicate translations within this batch before adding to results
-            if (batchData.translations && batchData.translations.length > 0) {
-                const batchTranslationsMap = new Map();
-                batchData.translations.forEach(trans => {
-                    if (trans.swedish) {
-                        const normalizedKey = normalizeTextForMatching(trans.swedish);
-                        // Keep the first occurrence, or replace placeholder with actual translation
-                        if (!batchTranslationsMap.has(normalizedKey)) {
-                            batchTranslationsMap.set(normalizedKey, trans);
-                        } else {
-                            const existing = batchTranslationsMap.get(normalizedKey);
-                            // Replace placeholder with actual translation if we have one
-                            if (existing.literal && existing.literal.startsWith('[Translation needed:')) {
-                                if (trans.literal && !trans.literal.startsWith('[Translation needed:')) {
-                                    batchTranslationsMap.set(normalizedKey, trans);
-                                }
-                            }
-                        }
-                    }
-                });
-                batchData.translations = Array.from(batchTranslationsMap.values());
-            }
-            
-            results.push(batchData);
-            // Record batch processing time
-            const batchEndTime = Date.now();
-            const batchDuration = batchEndTime - batchStartTime;
-            batchTimes.push(batchDuration);
-            
-            console.log(`Batch ${batchNumber}/${batches.length} complete: ${batchData.translations?.length || 0} translations (took ${(batchDuration / 1000).toFixed(1)}s)`);
-            
-            // Update placeholder progress (throttled: only every 25%)
+            // Update project progress in file list (no need to update analyzeBtn since fileInfo is hidden)
+            // Update placeholder progress (throttled: only every PROGRESS_UPDATE_THRESHOLD%)
             if (placeholderId) {
-                const progress = Math.round((batchNumber / batches.length) * 100);
-                // Only update if progress crossed a 25% threshold
-                const progressThreshold = Math.floor(progress / 25) * 25;
+                // Only update if progress crossed a threshold
+                const progressThreshold = Math.floor(progress / PROGRESS_UPDATE_THRESHOLD) * PROGRESS_UPDATE_THRESHOLD;
                 if (progressThreshold > lastProgressUpdate) {
                     lastProgressUpdate = progressThreshold;
                     // Update progress asynchronously (non-blocking)
-                    setTimeout(async () => {
+                    // Store timeout ID for cleanup
+                    const timeoutId = setTimeout(async () => {
                         try {
+                            // Check if analysis is still active before updating
+                            if (!isAnalyzing || shouldCancelAnalysis) {
+                                return;
+                            }
+                            
+                            // Update current project's progress in the home list
+                            if (currentProjectId) {
+                                const proj = fileProjects.find(p => p.id === currentProjectId);
+                                // Check if project still exists and analysis is still active
+                                if (!proj || !isAnalyzing || shouldCancelAnalysis) {
+                                    return;
+                                }
+                                
+                                proj.progress = progress;
+                               
+                                // Calculate and store estimated time remaining using captured values
+                                const currentBatchTimes = batchTimes.slice(); // Capture current batch times
+                                const totalBatches = batches.length;
+                                const currentCompletedCount = completedCount;
+                                if (currentBatchTimes.length > 0 && totalBatches > currentCompletedCount) {
+                                    const avgTimePerBatch = currentBatchTimes.reduce((sum, time) => sum + time, 0) / currentBatchTimes.length;
+                                    const remainingBatches = totalBatches - currentCompletedCount;
+                                    const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
+                                    proj.estimatedTimeRemaining = formatTimeRemaining(estimatedSecondsRemaining);
+                                }
+                                renderFileProjectsList();
+                            }
+                            
+                            // Double-check analysis is still active before saving
+                            if (!isAnalyzing || shouldCancelAnalysis || currentPlaceholderId !== placeholderId) {
+                                return;
+                            }
+                            
                             let saved = [];
                             if (window.electronAPI) {
                                 const result = await window.electronAPI.loadAnalyses();
@@ -1116,34 +1521,103 @@ ${missingText}`;
                             const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
                             if (placeholderIndex !== -1) {
                                 saved[placeholderIndex].progress = progress;
+                                saved[placeholderIndex].paused = isPaused; // Update pause state
                                 
                                 if (window.electronAPI) {
-                                    await window.electronAPI.saveAnalyses(saved);
+                                    const saveResult = await window.electronAPI.saveAnalyses(saved);
+                                    if (!saveResult || !saveResult.success) {
+                                        debugLog('❌ FAILED TO SAVE PROGRESS UPDATE', {
+                                            placeholderId: placeholderId,
+                                            progress: progress,
+                                            error: saveResult?.error || 'Unknown error'
+                                        }, 'error');
+                                    }
                                 }
                                 
-                                // Refresh saved files view if it's open
+                                // Update saved files view if it's open - use in-place update if possible
                                 if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
-                                    await loadSavedAnalyses();
+                                    // Try to update in-place first
+                                    const updated = updateSavedItemStatus(placeholderId, progress, isPaused);
+                                    // Only reload if update failed (item might not be rendered yet)
+                                    if (!updated) {
+                                        await loadSavedAnalyses();
+                                    }
                                 }
                             }
                         } catch (error) {
-                            console.error('Error updating placeholder progress:', error);
+                            debugLog('❌ ERROR UPDATING PLACEHOLDER PROGRESS', {
+                                placeholderId: placeholderId,
+                                progress: progress,
+                                error: error.message,
+                                stack: error.stack
+                            }, 'error');
                         }
                     }, 0);
+                    
+                    // Store timeout ID for cleanup
+                    progressUpdateTimeouts.push(timeoutId);
                 }
             }
-            
-        } catch (error) {
-            console.error(`Error processing batch ${batchNumber}:`, error);
-            // Continue with next batch even if this one fails
-            results.push({
-                translations: [],
-                expressions: []
-            });
         }
     }
     
     return results;
+}
+
+// Deduplicate fileProjects by fileName - keeps only one entry per fileName
+// Priority: analyzing > ready > completed > error
+// When same priority, prefers the one with matching currentProjectId
+// IMPORTANT: This removes ALL duplicates, not just picks one
+// PROTECTION: Never removes the currently analyzing project
+function deduplicateFileProjects() {
+    if (fileProjects.length === 0) return;
+    
+    const projectMap = new Map();
+    const priority = { 'analyzing': 4, 'ready': 3, 'completed': 2, 'error': 1 };
+    
+    // First pass: collect all projects by fileName
+    fileProjects.forEach(project => {
+        const existing = projectMap.get(project.fileName);
+        if (!existing) {
+            projectMap.set(project.fileName, project);
+        } else {
+            const existingPriority = priority[existing.status] || 0;
+            const currentPriority = priority[project.status] || 0;
+            
+            // PROTECTION: Never remove the currently analyzing project
+            if (project.id === currentProjectId && project.status === 'analyzing') {
+                // This is the active analysis - always keep it
+                projectMap.set(project.fileName, project);
+                return;
+            }
+            if (existing.id === currentProjectId && existing.status === 'analyzing') {
+                // Existing is the active analysis - always keep it
+                return;
+            }
+            
+            // Always prefer analyzing status if either is analyzing
+            if (existing.status === 'analyzing' && project.status !== 'analyzing') {
+                // Keep existing analyzing one - discard current
+                return;
+            } else if (project.status === 'analyzing' && existing.status !== 'analyzing') {
+                // Replace with analyzing one - discard existing
+                projectMap.set(project.fileName, project);
+            } else if (currentPriority > existingPriority) {
+                // Higher priority status - replace
+                projectMap.set(project.fileName, project);
+            } else if (currentPriority === existingPriority) {
+                // Same priority - prefer the one with currentProjectId, otherwise keep first found
+                if (project.id === currentProjectId && existing.id !== currentProjectId) {
+                    projectMap.set(project.fileName, project);
+                }
+                // Otherwise keep existing (first found)
+            }
+        }
+    });
+    
+    // Update fileProjects array to remove ALL duplicates
+    // This ensures only one entry per fileName exists
+    fileProjects = Array.from(projectMap.values());
 }
 
 // Render file projects list
@@ -1156,27 +1630,83 @@ function renderFileProjectsList() {
         return;
     }
     
+    // Don't filter duplicates - users CAN have multiple files with same name
+    // Just render all projects - clicking Start should UPDATE the existing entry, not create new one
+    
     fileProjectsList.style.display = 'flex';
     fileProjectsList.innerHTML = fileProjects.map(project => {
-        const statusText = project.status === 'ready' ? 'Ready' : 
-                          project.status === 'analyzing' ? 'Analyzing...' :
-                          project.status === 'completed' ? 'Completed' :
-                          project.status === 'error' ? 'Error' : 'Ready';
-        const statusClass = project.status === 'analyzing' ? 'status-analyzing' :
-                           project.status === 'completed' ? 'status-completed' :
-                           project.status === 'error' ? 'status-error' : 'status-ready';
+        const isAnalyzingProject = project.status === 'analyzing';
+        // Only show as queued if it's ready AND another file is analyzing (not this one)
+        const isQueued = isAnalyzing && !isAnalyzingProject && project.status === 'ready';
+        
+        // Build status text and class
+        let statusText = '';
+        let statusClass = '';
+        let estimatedTimeHtml = '';
+        
+        if (isAnalyzingProject) {
+            // Show paused status if paused, otherwise analyzing
+            if (isPaused) {
+                statusText = `Paused${typeof project.progress === 'number' ? ` (${project.progress}%)` : '...'}`;
+            } else {
+                statusText = `Analyzing${typeof project.progress === 'number' ? ` (${project.progress}%)` : '...'}`;
+            }
+            statusClass = 'status-analyzing';
+            if (project.estimatedTimeRemaining) {
+                estimatedTimeHtml = `<div class="file-project-time-estimate">estimated time left: ${project.estimatedTimeRemaining}</div>`;
+            }
+        } else if (isQueued) {
+            // Show "Paused" if paused, otherwise "queued"
+            if (isPaused) {
+                statusText = 'Paused';
+            } else {
+                statusText = 'queued';
+            }
+            statusClass = 'status-ready';
+        } else if (project.status === 'completed') {
+            statusText = 'Completed';
+            statusClass = 'status-completed';
+        } else if (project.status === 'error') {
+            statusText = 'Error';
+            statusClass = 'status-error';
+        } else {
+            statusText = 'Ready';
+            statusClass = 'status-ready';
+        }
         
         return `
             <div class="file-project-item" data-project-id="${project.id}">
                 <div class="file-project-info">
                     <span class="file-project-name">${escapeHtml(project.fileName)}</span>
-                    <span class="file-project-status ${statusClass}">${statusText}</span>
+                    ${isAnalyzingProject ? 
+                        `<span class="file-project-status ${statusClass}">${statusText}</span>` :
+                        statusText !== 'Ready' ? 
+                        `<span class="file-project-status ${statusClass}">${statusText}</span>` :
+                        ''
+                    }
                 </div>
                 <div class="file-project-actions">
-                    <button class="analyze-project-btn" data-project-id="${project.id}" ${project.status === 'analyzing' || isAnalyzing ? 'disabled' : ''}>
-                        ${project.status === 'analyzing' ? 'Analyzing...' : project.status === 'completed' ? 'Re-analyze' : 'Analyze'}
-                    </button>
-                    <button class="remove-project-btn" data-project-id="${project.id}" ${project.status === 'analyzing' ? 'disabled' : ''}>Remove</button>
+                    ${isAnalyzingProject ? 
+                        `<div class="action-status-container">
+                            <button class="pause-project-btn analyze-project-btn" data-project-id="${project.id}">
+                                ${isPaused ? 'Resume' : 'Pause'}
+                            </button>
+                            ${project.estimatedTimeRemaining ? 
+                                `<div class="file-project-time-estimate">expected time left: ${project.estimatedTimeRemaining}</div>` :
+                                ''
+                            }
+                        </div>` :
+                        // Only show Start button if not queued, or if queued but paused
+                        // Completed files don't have action buttons (per plan - no re-analyze)
+                        !isQueued || isPaused ? 
+                        (project.status === 'completed' ? '' : 
+                        `<button class="analyze-project-btn" data-project-id="${project.id}">Start</button>`) :
+                        ''
+                    }
+                    ${project.status !== 'analyzing' || isPaused ? 
+                        `<button class="remove-project-btn" data-project-id="${project.id}">Remove</button>` :
+                        ''
+                    }
                 </div>
             </div>
         `;
@@ -1186,7 +1716,73 @@ function renderFileProjectsList() {
     fileProjectsList.querySelectorAll('.analyze-project-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const projectId = e.target.dataset.projectId;
-            // Analyze this specific project, then continue with queue
+            // Check if this is a pause button
+            if (btn.classList.contains('pause-project-btn')) {
+                const project = fileProjects.find(p => p.id === currentProjectId);
+                
+                if (!isPaused) {
+                    // Pause: save current state
+                    if (project) {
+                        // currentBatchIndex will be saved in processSubtitleBatches when pause is detected
+                        project.status = 'paused';
+                        project.pausedAt = new Date().toISOString();
+                        debugLog('⏸️ PAUSE INITIATED', {
+                            projectId: project.id,
+                            fileName: project.fileName,
+                            currentBatchIndex: project.currentBatchIndex,
+                            progress: project.progress
+                        });
+                    }
+                    
+                    // Set ALL queued files (status === 'ready') to 'paused'
+                    fileProjects.forEach(p => {
+                        if (p.status === 'ready' && p.id !== currentProjectId) {
+                            p.status = 'paused';
+                            p.pausedAt = new Date().toISOString();
+                            debugLog('⏸️ QUEUED FILE PAUSED', {
+                                projectId: p.id,
+                                fileName: p.fileName
+                            });
+                        }
+                    });
+                } else {
+                    // Resume: restore analyzing status
+                    if (project) {
+                        project.status = 'analyzing';
+                        project.pausedAt = null;
+                        debugLog('▶️ RESUME INITIATED', {
+                            projectId: project.id,
+                            fileName: project.fileName,
+                            currentBatchIndex: project.currentBatchIndex,
+                            progress: project.progress
+                        });
+                    }
+                    
+                    // Set other paused files back to 'queued'
+                    fileProjects.forEach(p => {
+                        if (p.status === 'paused' && p.id !== currentProjectId) {
+                            p.status = 'queued';
+                            p.pausedAt = null;
+                            debugLog('▶️ PAUSED FILE QUEUED', {
+                                projectId: p.id,
+                                fileName: p.fileName
+                            });
+                        }
+                    });
+                }
+                
+                // Toggle pause state
+                isPaused = !isPaused;
+                renderFileProjectsList();
+                
+                // Update saved item status if placeholder exists
+                if (currentPlaceholderId) {
+                    await updateSavedItemStatusFromPause(currentPlaceholderId, isPaused);
+                }
+                
+                return;
+            }
+            // Otherwise, analyze this specific project
             await analyzeProject(projectId);
         });
     });
@@ -1201,50 +1797,178 @@ function renderFileProjectsList() {
 
 // Analyze a specific project
 async function analyzeProject(projectId) {
+    debugLog('🚀 ANALYSIS STARTED', {
+        projectId: projectId,
+        isAnalyzing: isAnalyzing,
+        hasApiKey: !!apiKey,
+        totalProjects: fileProjects.length
+    });
+
     const project = fileProjects.find(p => p.id === projectId);
-    if (!project) return;
-    
+    if (!project) {
+        debugLog('❌ ANALYSIS FAILED', { projectId: projectId, reason: 'Project not found' }, 'error');
+        return;
+    }
+
     if (!apiKey) {
+        debugLog('⚠️ ANALYSIS BLOCKED', { reason: 'No API key set' }, 'warn');
         alert('Please set your OpenAI API key in Settings first.');
         settingsBtn.click();
         return;
     }
-    
+
     if (isAnalyzing) {
-        alert('Analysis is already in progress. Please wait for it to complete.');
+        debugLog('⚠️ ANALYSIS BLOCKED', { reason: 'Analysis already in progress' }, 'warn');
+        // Silently return if analysis is already in progress (button should be disabled)
         return;
     }
     
+    // Find and update the EXISTING project - do NOT create new entries
+    let targetProject = fileProjects.find(p => p.id === projectId);
+    if (!targetProject) {
+        console.error('Project not found:', projectId);
+        return;
+    }
+    
+    // Store targetFileName early for use in error handling
+    const targetFileName = targetProject.fileName;
+    
+    // Check for duplicate filename in saved analyses before starting
+    try {
+        let saved = [];
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+            }
+        }
+        
+        // Check for duplicate filename in completed analyses only (not processing items)
+        const duplicateAnalysis = saved.find(item => 
+            item.fileName === targetProject.fileName && 
+            item.status !== 'processing' &&
+            item.analysis // Must have analysis data (completed)
+        );
+        
+        if (duplicateAnalysis) {
+            // Show rename modal
+            const newName = prompt(
+                `A file with the name "${targetProject.fileName}" already exists in your saved analyses.\n\n` +
+                `Please enter a new name for this file, or click Cancel to abort:`,
+                targetProject.fileName
+            );
+            
+            if (newName === null) {
+                // User cancelled
+                debugLog('❌ ANALYSIS CANCELLED', { reason: 'User cancelled duplicate filename rename' }, 'warn');
+                return;
+            }
+            
+            const trimmedName = newName.trim();
+            if (!trimmedName) {
+                alert('Filename cannot be empty.');
+                return;
+            }
+            
+            // Check if new name also exists
+            const newNameDuplicate = saved.find(item => 
+                item.fileName === trimmedName && 
+                item.status !== 'processing' &&
+                item.analysis
+            );
+            
+            if (newNameDuplicate) {
+                alert(`A file with the name "${trimmedName}" already exists. Please choose a different name.`);
+                return;
+            }
+            
+            // Update filename
+            targetProject.fileName = trimmedName;
+            debugLog('📝 FILENAME UPDATED', {
+                oldName: duplicateAnalysis.fileName,
+                newName: trimmedName,
+                projectId: targetProject.id
+            });
+            
+            // Re-render file list to show updated name
+            renderFileProjectsList();
+        }
+    } catch (error) {
+        console.error('Error checking for duplicate filename:', error);
+        // Continue with analysis even if check fails
+    }
+    
     // Set current project
-    currentProjectId = projectId;
-    currentSubtitleData = project.subtitleData;
-    fileName.textContent = project.fileName;
-    scriptName.textContent = project.fileName;
-    fileInfo.style.display = 'flex';
-    
-    project.status = 'analyzing';
+    currentProjectId = targetProject.id;
+    currentSubtitleData = targetProject.subtitleData;
+    fileName.textContent = targetProject.fileName;
+    scriptName.textContent = ''; // Clear header filename - only show when viewing saved analysis
+    // Don't show fileInfo at bottom - status is shown in file list instead
+    fileInfo.style.display = 'none';
+
+    // Update project status - UPDATE EXISTING entry, do NOT create new one
+    targetProject.status = 'analyzing';
+    // Initialize batch tracking fields if starting fresh, otherwise preserve if resuming
+    if (targetProject.currentBatchIndex === undefined || targetProject.currentBatchIndex === null) {
+        targetProject.currentBatchIndex = 0;
+        targetProject.processedBatches = [];
+        targetProject.pausedAt = null;
+        targetProject.progress = 0;
+    } else {
+        // Resuming from pause - keep currentBatchIndex and processedBatches
+        debugLog('▶️ RESUMING FROM PAUSE', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            currentBatchIndex: targetProject.currentBatchIndex,
+            progress: targetProject.progress,
+            processedBatchesCount: targetProject.processedBatches?.length || 0
+        });
+    }
+
+    debugLog('📋 PROJECT STATUS UPDATED', {
+        projectId: targetProject.id,
+        fileName: targetProject.fileName,
+        status: 'analyzing',
+        progress: 0,
+        subtitleCount: targetProject.subtitleData?.length || 0
+    });
+
+    // IMPORTANT: Just update the existing entry, don't create duplicates
+    // Users can have multiple files with same name, but clicking Start should UPDATE this specific one
     renderFileProjectsList();
-    
+
     isAnalyzing = true;
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = 'Analyzing...';
+    shouldCancelAnalysis = false;
+    isPaused = false; // Reset pause state when starting analysis
+    const analysisStartTime = Date.now(); // Track analysis start time
+    // Button status is shown in file list, no need to update analyzeBtn here
     
     // Create placeholder saved analysis entry with processing status
     let placeholderId = null;
-    if (project.fileName) {
+    if (targetProject.fileName) {
         try {
-            placeholderId = Date.now().toString();
+            placeholderId = generateUniqueId();
+            currentPlaceholderId = placeholderId; // Store globally for status updates
+            const now = new Date().toISOString();
             const placeholderAnalysis = {
                 id: placeholderId,
-                fileName: project.fileName,
-                date: new Date().toISOString(),
+                fileName: targetProject.fileName,
+                dateCreated: now,
+                dateEdited: now,
                 status: 'processing',
                 progress: 0,
+                paused: false,
                 analysis: null,
                 chatHistory: [],
                 subtitleData: null
             };
-            
+
+            debugLog('📝 PLACEHOLDER CREATION STARTED', {
+                placeholderId: placeholderId,
+                fileName: targetProject.fileName,
+                projectId: targetProject.id
+            });
+
             // Get existing saved analyses
             let saved = [];
             if (window.electronAPI) {
@@ -1252,13 +1976,76 @@ async function analyzeProject(projectId) {
                 if (result.success) {
                     saved = result.data || [];
                 }
+                debugLog('💾 SAVED ANALYSES LOADED', {
+                    savedCount: saved.length,
+                    loadSuccess: result.success
+                });
+            }
+
+            // Check if this file already has a placeholder (might be a queued file starting)
+            const existingPlaceholderIndex = saved.findIndex(item =>
+                item.fileName === targetProject.fileName && item.status === 'processing'
+            );
+
+            if (existingPlaceholderIndex !== -1) {
+                // Update existing placeholder to reflect it's now analyzing (reuse it)
+                saved[existingPlaceholderIndex].id = placeholderId;
+                saved[existingPlaceholderIndex].fileName = targetProject.fileName; // Ensure fileName matches current project
+                saved[existingPlaceholderIndex].paused = false;
+                saved[existingPlaceholderIndex].progress = 0;
+                const now = new Date().toISOString();
+                saved[existingPlaceholderIndex].dateCreated = saved[existingPlaceholderIndex].dateCreated || now;
+                saved[existingPlaceholderIndex].dateEdited = now;
+                currentPlaceholderId = placeholderId; // Store globally for status updates
+                debugLog('🔄 EXISTING PLACEHOLDER UPDATED', {
+                    placeholderId: placeholderId,
+                    fileName: targetProject.fileName,
+                    previousId: saved[existingPlaceholderIndex].id
+                });
+            } else {
+                // Remove any other placeholders for this file (cleanup)
+                const beforeFilterCount = saved.length;
+                saved = saved.filter(item => !(item.fileName === targetProject.fileName && item.status === 'processing'));
+                const removedCount = beforeFilterCount - saved.length;
+                // Add new placeholder for analyzing file
+                saved.push(placeholderAnalysis);
+                debugLog('➕ NEW PLACEHOLDER CREATED', {
+                    placeholderId: placeholderId,
+                    fileName: targetProject.fileName,
+                    cleanedPlaceholders: removedCount,
+                    totalSaved: saved.length
+                });
             }
             
-            // Remove any existing placeholder for this file
-            saved = saved.filter(item => !(item.fileName === project.fileName && item.status === 'processing'));
-            
-            // Add placeholder
-            saved.push(placeholderAnalysis);
+            // Create placeholders for all queued files
+            // Note: isAnalyzing is set to true just before this section
+            fileProjects.forEach(project => {
+                // Check if this project is queued (ready AND another file is analyzing)
+                const isQueuedProject = project.status === 'ready' && isAnalyzing && project.id !== targetProject.id;
+                if (isQueuedProject && project.fileName) {
+                    // Check if placeholder already exists for this queued file
+                    const existingPlaceholder = saved.find(item => 
+                        item.fileName === project.fileName && item.status === 'processing'
+                    );
+                    
+                    if (!existingPlaceholder) {
+                        // Create placeholder for queued file
+                        const queuedPlaceholderId = generateUniqueId() + '-' + project.id;
+                        const queuedPlaceholder = {
+                            id: queuedPlaceholderId,
+                            fileName: project.fileName,
+                            date: new Date().toISOString(),
+                            status: 'processing',
+                            progress: 0,
+                            paused: false,
+                            analysis: null,
+                            chatHistory: [],
+                            subtitleData: null
+                        };
+                        saved.push(queuedPlaceholder);
+                    }
+                }
+            });
             
             // Keep only last 50 analyses
             if (saved.length > 50) {
@@ -1282,10 +2069,23 @@ async function analyzeProject(projectId) {
     }
     
     try {
-        console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries for ${project.fileName}...`);
-        
+        debugLog('⚙️ ANALYSIS PROCESSING STARTED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            subtitleCount: currentSubtitleData.length,
+            placeholderId: placeholderId
+        });
+
         // Process subtitles in batches
         const batchResults = await processSubtitleBatches(currentSubtitleData, placeholderId);
+
+        debugLog('⚙️ ANALYSIS PROCESSING COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            batchCount: batchResults.length,
+            totalTranslations: batchResults.reduce((sum, batch) => sum + (batch.translations?.length || 0), 0),
+            totalExpressions: batchResults.reduce((sum, batch) => sum + (batch.expressions?.length || 0), 0)
+        }, 'success');
         
         // Combine all batch results
         const analysisData = {
@@ -1335,14 +2135,36 @@ async function analyzeProject(projectId) {
             }
         });
         analysisData.expressions = Array.from(expressionsMap.values());
-        
-        console.log(`Analysis complete: ${analysisData.translations.length} translations, ${analysisData.expressions.length} expressions`);
-        
+
+        debugLog('✅ ANALYSIS COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            translationsCount: analysisData.translations.length,
+            expressionsCount: analysisData.expressions.length,
+            processingTime: Date.now() - analysisStartTime
+        }, 'success');
+
         // Update project with analysis data
-        project.analysisData = analysisData;
-        project.status = 'completed';
+        targetProject.analysisData = analysisData;
+        targetProject.status = 'completed';
+        delete targetProject.progress;
+        delete targetProject.estimatedTimeRemaining;
+
+        debugLog('📋 PROJECT STATUS COMPLETED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            status: 'completed'
+        });
         
         // Autosave: Automatically save the completed analysis
+        debugLog('💾 AUTOSAVE STARTED', {
+            projectId: targetProject.id,
+            fileName: targetProject.fileName,
+            placeholderId: placeholderId,
+            analysisTranslations: analysisData.translations?.length || 0,
+            analysisExpressions: analysisData.expressions?.length || 0
+        });
+
         try {
             // Get existing saved analyses
             let saved = [];
@@ -1351,49 +2173,167 @@ async function analyzeProject(projectId) {
                 if (result.success) {
                     saved = result.data || [];
                 }
+                debugLog('💾 AUTOSAVE DATA LOADED', {
+                    savedCount: saved.length,
+                    loadSuccess: result.success
+                });
             }
             
-            // Update placeholder if it exists, otherwise create new entry
+            // Get filename from current project (single source of truth)
+            // Try multiple fallback strategies to find project
+            let currentProject = fileProjects.find(p => p.id === currentProjectId);
+            if (!currentProject && currentProjectId) {
+                // Try finding by fileName as fallback
+                const targetFileName = targetProject?.fileName;
+                if (targetFileName) {
+                    currentProject = fileProjects.find(p => p.fileName === targetFileName);
+                }
+            }
+            
+            if (!currentProject) {
+                debugLog('❌ PROJECT NOT FOUND FOR AUTOSAVE', { 
+                    currentProjectId,
+                    targetFileName: targetProject?.fileName,
+                    availableProjects: fileProjects.map(p => ({ id: p.id, fileName: p.fileName }))
+                }, 'error');
+                // Still try to save with filename from targetProject if available
+                if (!targetProject || !targetProject.fileName) {
+                    debugLog('❌ CANNOT SAVE - NO PROJECT OR FILENAME', {}, 'error');
+                    return;
+                }
+            }
+            const finalFileName = currentProject ? currentProject.fileName : targetProject.fileName;
+            
+            // Re-check for duplicates before saving (file may have been renamed during analysis)
+            // This ensures we catch any filename changes that occurred after initial check
+            let savedForDuplicateCheck = [];
+            if (window.electronAPI) {
+                const duplicateCheckResult = await window.electronAPI.loadAnalyses();
+                if (duplicateCheckResult.success) {
+                    savedForDuplicateCheck = duplicateCheckResult.data || [];
+                }
+            }
+            
+            // Check if duplicate exists (excluding current placeholder)
+            const duplicateIndex = savedForDuplicateCheck.findIndex(item =>
+                item.fileName === finalFileName &&
+                (placeholderId ? item.id !== placeholderId : true) &&
+                item.status !== 'processing' // Only check completed analyses
+            );
+
+            if (duplicateIndex !== -1) {
+                // Duplicate found - show warning and overwrite
+                debugLog('⚠️ DUPLICATE FILE DETECTED BEFORE SAVE', {
+                    fileName: finalFileName,
+                    willOverwrite: true,
+                    existingItemId: savedForDuplicateCheck[duplicateIndex].id,
+                    note: 'Re-check caught duplicate that may have been created during analysis'
+                }, 'warn');
+                // Will overwrite when we update/create the entry below
+            }
+            
+            // Use the latest saved data for the save operation
+            saved = savedForDuplicateCheck;
+            
+            // Create the completed analysis entry
+            const now = new Date().toISOString();
+            let dateCreated = now;
+            let dateEdited = now;
+            
+            // If replacing a placeholder, preserve its dateCreated
+            if (placeholderId) {
+                const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
+                if (placeholderIndex !== -1 && saved[placeholderIndex].dateCreated) {
+                    dateCreated = saved[placeholderIndex].dateCreated;
+                }
+            } else {
+                // If overwriting an existing entry, preserve its dateCreated
+                const overwriteIndex = saved.findIndex(item =>
+                    item.fileName === finalFileName &&
+                    item.status !== 'processing'
+                );
+                if (overwriteIndex !== -1 && saved[overwriteIndex].dateCreated) {
+                    dateCreated = saved[overwriteIndex].dateCreated;
+                }
+            }
+            
+            const completedAnalysis = {
+                id: placeholderId || generateUniqueId(),
+                fileName: finalFileName,
+                dateCreated: dateCreated,
+                dateEdited: dateEdited, // Always update dateEdited on autosave
+                analysis: analysisData,
+                chatHistory: currentChatHistory,
+                subtitleData: currentSubtitleData
+            };
+            
+            // Validate analysis data before saving
+            const validation = validateAnalysisData(analysisData);
+            if (!validation.valid) {
+                debugLog('❌ INVALID ANALYSIS DATA - NOT SAVING', {
+                    error: validation.error,
+                    fileName: finalFileName,
+                    hasTranslations: !!analysisData?.translations,
+                    hasExpressions: !!analysisData?.expressions
+                }, 'error');
+                // Don't save invalid data - log error and continue
+                return;
+            }
+
             if (placeholderId) {
                 const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
                 if (placeholderIndex !== -1) {
-                    // Update placeholder to completed analysis
-                    saved[placeholderIndex] = {
-                        id: placeholderId,
-                        fileName: project.fileName,
-                        date: new Date().toISOString(),
-                        analysis: analysisData,
-                        chatHistory: currentChatHistory,
-                        subtitleData: currentSubtitleData
-                        // Note: status and progress fields are removed (no longer processing)
-                    };
+                    // Replace placeholder with completed analysis
+                    debugLog('🔄 PLACEHOLDER REPLACED', {
+                        placeholderId: placeholderId,
+                        fileName: finalFileName
+                    });
+                    saved[placeholderIndex] = completedAnalysis;
                 } else {
-                    // Placeholder not found, create new entry
-                    const savedAnalysis = {
-                        id: Date.now().toString(),
-                        fileName: project.fileName,
-                        date: new Date().toISOString(),
-                        analysis: analysisData,
-                        chatHistory: currentChatHistory,
-                        subtitleData: currentSubtitleData
-                    };
-                    // Remove any existing analyses with the same fileName (keep only latest)
-                    saved = saved.filter(item => item.fileName !== project.fileName);
-                    saved.push(savedAnalysis);
+                    // Placeholder not found - check for duplicate to overwrite
+                    const overwriteIndex = saved.findIndex(item =>
+                        item.fileName === finalFileName &&
+                        item.status !== 'processing'
+                    );
+                    if (overwriteIndex !== -1) {
+                        // Overwrite duplicate
+                        debugLog('🔄 DUPLICATE OVERWRITTEN', {
+                            fileName: finalFileName,
+                            oldItemId: saved[overwriteIndex].id,
+                            newItemId: completedAnalysis.id
+                        });
+                        saved[overwriteIndex] = completedAnalysis;
+                    } else {
+                        // Create new entry
+                        debugLog('➕ NEW ANALYSIS CREATED', {
+                            itemId: completedAnalysis.id,
+                            fileName: finalFileName
+                        });
+                        saved.push(completedAnalysis);
+                    }
                 }
             } else {
-                // No placeholder, create new entry
-                const savedAnalysis = {
-                    id: Date.now().toString(),
-                    fileName: project.fileName,
-                    date: new Date().toISOString(),
-                    analysis: analysisData,
-                    chatHistory: currentChatHistory,
-                    subtitleData: currentSubtitleData
-                };
-                // Remove any existing analyses with the same fileName (keep only latest)
-                saved = saved.filter(item => item.fileName !== project.fileName);
-                saved.push(savedAnalysis);
+                // No placeholder - check for duplicate to overwrite
+                const overwriteIndex = saved.findIndex(item =>
+                    item.fileName === finalFileName &&
+                    item.status !== 'processing'
+                );
+                if (overwriteIndex !== -1) {
+                    // Overwrite duplicate
+                    debugLog('🔄 DUPLICATE OVERWRITTEN', {
+                        fileName: finalFileName,
+                        oldItemId: saved[overwriteIndex].id,
+                        newItemId: completedAnalysis.id
+                    });
+                    saved[overwriteIndex] = completedAnalysis;
+                } else {
+                    // Create new entry
+                    debugLog('➕ NEW ANALYSIS CREATED', {
+                        itemId: completedAnalysis.id,
+                        fileName: finalFileName
+                    });
+                    saved.push(completedAnalysis);
+                }
             }
             
             // Keep only last 50 analyses
@@ -1403,16 +2343,31 @@ async function analyzeProject(projectId) {
             
             // Save to file storage
             if (window.electronAPI) {
+                debugLog('💾 AUTOSAVE EXECUTING', {
+                    finalFileName: finalFileName,
+                    savedCount: saved.length,
+                    placeholderReplaced: !!placeholderId
+                });
+
                 const saveResult = await window.electronAPI.saveAnalyses(saved);
                 if (saveResult.success) {
-                    console.log('Analysis autosaved successfully');
+                    debugLog('✅ AUTOSAVE COMPLETED', {
+                        finalFileName: finalFileName,
+                        savedCount: saved.length,
+                        projectId: targetProject.id
+                    }, 'success');
                 } else {
-                    console.error('Error autosaving analysis:', saveResult.error);
+                    debugLog('❌ AUTOSAVE FAILED', {
+                        finalFileName: finalFileName,
+                        error: saveResult.error,
+                        projectId: targetProject.id
+                    }, 'error');
                 }
             }
             
-            // Refresh saved files view if it's open
-            if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+            // Always refresh saved files view when analysis completes
+            // This ensures the view updates even if user navigates to it later
+            if (savedAnalysesView) {
                 await loadSavedAnalyses();
             }
         } catch (error) {
@@ -1425,28 +2380,8 @@ async function analyzeProject(projectId) {
         currentAnalysis = analysisData;
         displayAnalysis(analysisData);
         
-        // Check which view is currently active
-        const isInSettings = settingsView.style.display === 'flex';
-        const isInSavedAnalyses = savedAnalysesView.style.display === 'flex';
-        const isInStudyModal = studyModal && studyModal.style.display !== 'none';
-        
-        // If analysis completes while user is in saved files view, switch to results
-        if (isInSavedAnalyses) {
-            savedAnalysesView.style.display = 'none';
-            uploadSection.style.display = 'none';
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'none';
-            if (expressionsContent && expressionsContent.parentElement) {
-                expressionsContent.parentElement.style.display = 'none';
-            }
-        } else if (!isInSettings && !isInStudyModal) {
-            uploadSection.style.display = 'none';
-            resultsSection.style.display = 'flex';
-            chatSection.style.display = 'none';
-            if (expressionsContent && expressionsContent.parentElement) {
-                expressionsContent.parentElement.style.display = 'none';
-            }
-        }
+        // Don't automatically switch views after analysis completes
+        // User can manually view results or saved analyses when ready
         
         // Initialize chat history
         currentChatHistory = [
@@ -1482,19 +2417,94 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Update render
         renderFileProjectsList();
         
+        // Reset pause state on successful completion
+        isPaused = false;
+        currentPlaceholderId = null; // Clear placeholder ID
+        
     } catch (error) {
-        console.error('Analysis error:', error);
-        project.status = 'error';
+        debugLog('❌ ANALYSIS FAILED', {
+            projectId: currentProjectId,
+            fileName: targetProject?.fileName || 'unknown',
+            error: error.message,
+            stack: error.stack,
+            processingTime: Date.now() - analysisStartTime
+        }, 'error');
+
+        // Reset pause state on error
+        isPaused = false;
+        currentPlaceholderId = null; // Clear placeholder ID on error
+        // Find target project again (it might have changed after deduplication)
+        // Try multiple fallback strategies
+        let errorProject = fileProjects.find(p => p.id === currentProjectId);
+        if (!errorProject && currentProjectId) {
+            // Try finding by fileName as fallback
+            if (targetFileName) {
+                errorProject = fileProjects.find(p => p.fileName === targetFileName);
+            }
+        }
+        if (errorProject) {
+            errorProject.status = 'error';
+            debugLog('📋 PROJECT STATUS ERROR', {
+                projectId: errorProject.id,
+                fileName: errorProject.fileName,
+                status: 'error'
+            });
+        } else {
+            debugLog('⚠️ ERROR PROJECT NOT FOUND', {
+                currentProjectId,
+                targetFileName,
+                availableProjects: fileProjects.map(p => ({ id: p.id, fileName: p.fileName }))
+            }, 'warn');
+        }
         renderFileProjectsList();
         alert('Error during analysis: ' + error.message);
     } finally {
-        isAnalyzing = false;
-        analyzeBtn.disabled = false;
-        analyzeBtn.textContent = 'Analyze';
-        currentProjectId = null;
+        // Clear all pending progress update timeouts
+        progressUpdateTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+        progressUpdateTimeouts = [];
         
-        // Automatically process next file in queue
-        processQueue();
+        // Check if analysis was cancelled
+        if (shouldCancelAnalysis) {
+            // Reset pause state on cancel
+            isPaused = false;
+            currentPlaceholderId = null; // Clear placeholder ID on cancel
+            // Find target project again (it might have changed after deduplication)
+            // Try multiple fallback strategies
+            let cancelProject = fileProjects.find(p => p.id === currentProjectId);
+            if (!cancelProject && currentProjectId) {
+                // Try finding by fileName as fallback
+                if (targetFileName) {
+                    cancelProject = fileProjects.find(p => p.fileName === targetFileName);
+                }
+            }
+            if (cancelProject) {
+                cancelProject.status = 'ready';
+                delete cancelProject.progress;
+                delete cancelProject.estimatedTimeRemaining;
+                console.log('Analysis cancelled');
+            } else {
+                debugLog('⚠️ CANCEL PROJECT NOT FOUND', {
+                    currentProjectId,
+                    targetFileName,
+                    availableProjects: fileProjects.map(p => ({ id: p.id, fileName: p.fileName }))
+                }, 'warn');
+            }
+        }
+        
+        isAnalyzing = false;
+        shouldCancelAnalysis = false;
+        // Button status is shown in file list, no need to update analyzeBtn here
+        if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+        }
+        fileInfo.style.display = 'none'; // Keep hidden
+        currentProjectId = null;
+        renderFileProjectsList();
+        
+        // Automatically process next file in queue (only if not cancelled)
+        if (!shouldCancelAnalysis) {
+            processQueue();
+        }
     }
 }
 
@@ -1513,22 +2523,46 @@ function removeProject(projectId) {
     }
     
     fileProjects.splice(projectIndex, 1);
+    // window.fileProjects is auto-synced via getter
     renderFileProjectsList();
 }
 
+    // Cancel button
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            if (isAnalyzing) {
+                shouldCancelAnalysis = true;
+            }
+        });
+    }
+
 // Process files one by one automatically
 async function processQueue() {
-    // Don't start if already analyzing
-    if (isAnalyzing) {
+    // Don't start if already analyzing or queue is being processed
+    if (isAnalyzing || isProcessingQueue) {
         return;
     }
     
-    // Find first ready project
-    const readyProject = fileProjects.find(p => p.status === 'ready');
-    if (readyProject) {
-        await analyzeProject(readyProject.id);
-        // After analysis completes, check for next file
-        processQueue();
+    isProcessingQueue = true;
+    
+    try {
+        // Find first ready project and update it (don't create new entries)
+        const readyProject = fileProjects.find(p => p.status === 'ready');
+        if (readyProject) {
+            await analyzeProject(readyProject.id);
+            // After analysis completes, check for next file
+            // Clear flag before recursive call so it can start again
+            isProcessingQueue = false;
+            // Recursive call - will check isProcessingQueue flag
+            processQueue();
+        } else {
+            // No more ready projects - clear flag
+            isProcessingQueue = false;
+        }
+    } catch (error) {
+        // Ensure flag is cleared on error
+        isProcessingQueue = false;
+        console.error('Error in processQueue:', error);
     }
 }
 
@@ -1559,24 +2593,32 @@ async function processQueue() {
         }
 
         if (isAnalyzing) {
-            alert('Analysis is already in progress. Please wait for it to complete.');
+            // Silently return if analysis is already in progress (button should be disabled)
             return;
         }
 
         isAnalyzing = true;
+        shouldCancelAnalysis = false;
+        // Button status is shown in file list (fileInfo is hidden), but keep this for fallback old behavior
         analyzeBtn.disabled = true;
         analyzeBtn.textContent = 'Analyzing...';
+        if (cancelBtn) {
+            cancelBtn.style.display = 'none'; // Hide cancel button in fileInfo since we use file list
+        }
+        fileInfo.style.display = 'none'; // Don't show fileInfo at bottom
         
         // Create placeholder saved analysis entry with processing status
         let placeholderId = null;
         const currentFileName = fileName.textContent || 'unknown';
         if (currentFileName && currentFileName !== 'unknown') {
             try {
-                placeholderId = Date.now().toString();
+                placeholderId = generateUniqueId();
+                const now = new Date().toISOString();
                 const placeholderAnalysis = {
                     id: placeholderId,
                     fileName: currentFileName,
-                    date: new Date().toISOString(),
+                    dateCreated: now,
+                    dateEdited: now,
                     status: 'processing',
                     analysis: null,
                     chatHistory: [],
@@ -1603,14 +2645,16 @@ async function processQueue() {
                     saved.shift();
                 }
                 
-                // Save placeholder
+                // Save placeholder (non-blocking)
                 if (window.electronAPI) {
-                    await window.electronAPI.saveAnalyses(saved);
+                    window.electronAPI.saveAnalyses(saved).catch(err => {
+                        console.error('Error saving placeholder:', err);
+                    });
                 }
                 
-                // Refresh saved files view if it's open
+                // Refresh saved files view if it's open (non-blocking)
                 if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
-                    await loadSavedAnalyses();
+                    setTimeout(() => loadSavedAnalyses(), 0);
                 }
             } catch (error) {
                 console.error('Error creating placeholder:', error);
@@ -1621,7 +2665,13 @@ async function processQueue() {
             console.log(`Starting analysis of ${currentSubtitleData.length} subtitle entries...`);
             
             // Process subtitles in batches to handle large files
-            const batchResults = await processSubtitleBatches(currentSubtitleData);
+            const batchResults = await processSubtitleBatches(currentSubtitleData, placeholderId);
+            
+            // Check if analysis was cancelled
+            if (shouldCancelAnalysis) {
+                console.log('Analysis cancelled by user');
+                return;
+            }
             
             // Combine all batch results
             const analysisData = {
@@ -1699,11 +2749,11 @@ async function processQueue() {
                     // Find and update placeholder
                     const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
                     if (placeholderIndex !== -1) {
+                        // Update placeholder to completed analysis (remove status and progress fields)
                         saved[placeholderIndex] = {
                             id: placeholderId,
                             fileName: currentFileName,
                             date: new Date().toISOString(),
-                            status: 'completed',
                             analysis: analysisData,
                             chatHistory: currentChatHistory,
                             subtitleData: currentSubtitleData
@@ -1714,8 +2764,9 @@ async function processQueue() {
                             await window.electronAPI.saveAnalyses(saved);
                         }
                         
-                        // Refresh saved files view if it's open
-                        if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                        // Always refresh saved files view when analysis completes
+                        // This ensures the view updates even if user navigates to it later
+                        if (savedAnalysesView) {
                             await loadSavedAnalyses();
                         }
                     }
@@ -1795,8 +2846,13 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             alert('Error during analysis: ' + error.message);
         } finally {
             isAnalyzing = false;
+            shouldCancelAnalysis = false;
             analyzeBtn.disabled = false;
             analyzeBtn.textContent = 'Analyze';
+            if (cancelBtn) {
+                cancelBtn.style.display = 'none';
+            }
+            fileInfo.style.display = 'none'; // Keep hidden
         }
     });
     
@@ -1907,32 +2963,6 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
     
     // Initialize button text
     updateLevelFilterButtonText();
-    
-    // Study modal level filter checkboxes
-    const studyLevelCheckboxes = document.querySelectorAll('.study-level-checkbox');
-    studyLevelCheckboxes.forEach(checkbox => {
-        // Set initial state based on selectedStudyLevels
-        checkbox.checked = selectedStudyLevels.includes(checkbox.value);
-        
-        // Add change event listener
-        checkbox.addEventListener('change', (e) => {
-            const level = e.target.value;
-            if (e.target.checked) {
-                // Add level to selected study levels if not already present
-                if (!selectedStudyLevels.includes(level)) {
-                    selectedStudyLevels.push(level);
-                }
-            } else {
-                // Remove level from selected study levels
-                selectedStudyLevels = selectedStudyLevels.filter(l => l !== level);
-            }
-            
-            // Refresh study expressions display with new filter
-            if (studyModal && studyModal.style.display !== 'none') {
-                displayStudyExpressions();
-            }
-        });
-    });
 
 // Display analysis results
 function displayAnalysis(data) {
@@ -2045,12 +3075,24 @@ function displayAnalysis(data) {
 
 async function sendChatMessage() {
     const message = chatInput.value.trim();
-    if (!message || !apiKey) return;
+    debugLog('💬 CHAT MESSAGE SENT', {
+        messageLength: message.length,
+        hasApiKey: !!apiKey,
+        messagePreview: message.substring(0, 50) + (message.length > 50 ? '...' : ''),
+        chatHistoryLength: currentChatHistory.length
+    });
+
+    if (!message || !apiKey) {
+        if (!message) debugLog('⚠️ CHAT MESSAGE SKIPPED', { reason: 'Empty message' }, 'warn');
+        if (!apiKey) debugLog('⚠️ CHAT MESSAGE SKIPPED', { reason: 'No API key' }, 'warn');
+        return;
+    }
 
     // Check for {add- word} pattern
     const addWordMatch = message.match(/\{add-\s*([^}]+)\}/i);
     if (addWordMatch) {
         const wordToAdd = addWordMatch[1].trim();
+        debugLog('➕ CHAT ADD EXPRESSION DETECTED', { wordToAdd: wordToAdd });
         await addExpressionFromChat(wordToAdd, 'main');
         chatInput.value = '';
         return;
@@ -2061,12 +3103,19 @@ async function sendChatMessage() {
     const wordMatch = message.match(/["']([^"']+)["']/); // Extract word in quotes
     if (wordMatch) {
         wordToSave = wordMatch[1];
+        debugLog('📝 CHAT WORD EXTRACTED', { wordToSave: wordToSave });
     }
-    
+
     // Add user message to chat
     addChatMessage('user', message);
     currentChatHistory.push({ role: 'user', content: message });
-    
+
+    debugLog('👤 USER MESSAGE ADDED', {
+        messageLength: message.length,
+        wordToSave: wordToSave,
+        updatedChatHistoryLength: currentChatHistory.length
+    });
+
     chatInput.value = '';
     chatSendBtn.disabled = true;
     
@@ -2114,14 +3163,27 @@ async function sendChatMessage() {
 
 // Add expression from chat using {add- word} command
 async function addExpressionFromChat(word, context = 'main') {
+    debugLog('➕ ADDING EXPRESSION FROM CHAT', {
+        word: word,
+        context: context,
+        hasApiKey: !!apiKey,
+        hasCurrentAnalysis: !!currentAnalysis
+    });
+
     if (!apiKey || !word) {
+        debugLog('❌ ADD EXPRESSION FAILED', {
+            reason: !apiKey ? 'No API key' : 'No word provided',
+            word: word,
+            hasApiKey: !!apiKey
+        }, 'error');
         console.error('Missing API key or word');
         return;
     }
-    
+
     try {
         // Initialize currentAnalysis if it doesn't exist
         if (!currentAnalysis) {
+            debugLog('🔄 INITIALIZING ANALYSIS STRUCTURE', { reason: 'No current analysis existed' });
             currentAnalysis = {
                 translations: [],
                 expressions: []
@@ -2317,19 +3379,35 @@ function removeChatMessage(messageId) {
 
     // Save analysis
     saveAnalysisBtn.addEventListener('click', async () => {
+        debugLog('💾 MANUAL SAVE INITIATED', {
+            hasAnalysis: !!currentAnalysis,
+            fileName: fileName.textContent,
+            translationsCount: currentAnalysis?.translations?.length || 0,
+            expressionsCount: currentAnalysis?.expressions?.length || 0
+        });
+
         if (!currentAnalysis) {
+            debugLog('❌ MANUAL SAVE FAILED', { reason: 'No analysis to save' }, 'error');
             alert('No analysis to save.');
             return;
         }
 
+        const now = new Date().toISOString();
         const savedAnalysis = {
-            id: Date.now().toString(),
+            id: generateUniqueId(),
             fileName: fileName.textContent,
-            date: new Date().toISOString(),
+            dateCreated: now,
+            dateEdited: now,
             analysis: currentAnalysis,
             chatHistory: currentChatHistory,
             subtitleData: currentSubtitleData
         };
+
+        debugLog('📝 MANUAL SAVE ANALYSIS CREATED', {
+            id: savedAnalysis.id,
+            fileName: savedAnalysis.fileName,
+            date: savedAnalysis.date
+        });
 
         try {
             // Get existing saved analyses
@@ -2350,16 +3428,35 @@ function removeChatMessage(messageId) {
             
             // Save to file storage
             if (window.electronAPI) {
+                debugLog('💾 MANUAL SAVE EXECUTING', {
+                    totalSavedCount: saved.length,
+                    newAnalysisId: savedAnalysis.id
+                });
+
                 const saveResult = await window.electronAPI.saveAnalyses(saved);
                 if (saveResult.success) {
+                    debugLog('✅ MANUAL SAVE COMPLETED', {
+                        totalSavedCount: saved.length,
+                        savedAnalysisId: savedAnalysis.id,
+                        fileName: savedAnalysis.fileName
+                    }, 'success');
                     alert('Analysis saved!');
                 } else {
+                    debugLog('❌ MANUAL SAVE FAILED', {
+                        error: saveResult.error,
+                        savedAnalysisId: savedAnalysis.id
+                    }, 'error');
                     alert('Error saving analysis: ' + (saveResult.error || 'Unknown error'));
                 }
             } else {
+                debugLog('❌ MANUAL SAVE FAILED', { reason: 'Storage API not available' }, 'error');
                 alert('Storage API not available');
             }
         } catch (error) {
+            debugLog('❌ MANUAL SAVE ERROR', {
+                error: error.message,
+                savedAnalysisId: savedAnalysis.id
+            }, 'error');
             console.error('Error saving analysis:', error);
             alert('Error saving analysis: ' + error.message);
         }
@@ -2372,6 +3469,7 @@ function removeChatMessage(messageId) {
             resultsSection.style.display = 'none';
             chatSection.style.display = 'none';
             uploadSection.style.display = 'none';
+            settingsView.style.display = 'none';
             savedAnalysesView.style.display = 'flex';
             
             // Reset edit mode and load saved analyses
@@ -2385,14 +3483,24 @@ function removeChatMessage(messageId) {
 
     // Saved analyses view
     savedAnalysesBtn.addEventListener('click', async () => {
-        console.log('Saved analyses button clicked');
-        
+        debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
+            isAnalyzing: isAnalyzing,
+            currentAnalysis: !!currentAnalysis,
+            projectCount: fileProjects.length
+        });
+
         // Show warning if analysis is in progress
         if (isAnalyzing) {
+            debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
+                showingConfirmDialog: true,
+                currentProjectId: currentProjectId
+            });
             const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
             if (!confirmLeave) {
+                debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
                 return;
             }
+            debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
         }
         
         isEditMode = false; // Reset edit mode when opening
@@ -2404,6 +3512,7 @@ function removeChatMessage(messageId) {
         resultsSection.style.display = 'none';
         uploadSection.style.display = 'none';
         chatSection.style.display = 'none';
+        settingsView.style.display = 'none';
         // Note: Analysis continues in background if in progress
         // Progress will be visible when returning to home window
     });
@@ -2419,7 +3528,12 @@ function removeChatMessage(messageId) {
                     return;
                 }
                 
-                const confirmDelete = confirm(`Are you sure you want to delete ${checkedItems.length} saved analysis/analyses?`);
+                // Per spec: "Are you sure you want to permanently delete this file?"
+                const itemCount = checkedItems.length;
+                const confirmMessage = itemCount === 1 
+                    ? 'Are you sure you want to permanently delete this file?'
+                    : `Are you sure you want to permanently delete these ${itemCount} files?`;
+                const confirmDelete = confirm(confirmMessage);
                 if (!confirmDelete) {
                     return;
                 }
@@ -2507,78 +3621,436 @@ function updateEditButton() {
     }
 }
 
-async function loadSavedAnalyses() {
-    let saved = [];
+// Update saved item status in-place without recreating the DOM element
+function updateSavedItemStatus(itemId, progress, paused = false) {
+    debugLog('📊 PLACEHOLDER STATUS UPDATED', {
+        itemId: itemId,
+        progress: progress,
+        paused: paused,
+        statusText: paused ? `paused (${progress}%)` : `analyzing (${progress}%)`
+    });
+
+    if (!inactiveSavesList) {
+        debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'inactiveSavesList not available', itemId: itemId }, 'warn');
+        return false;
+    }
+
+    // Find the existing saved item element by data-item-id attribute in inactive saves list
+    const savedItemElement = inactiveSavesList.querySelector(`[data-item-id="${itemId}"]`);
+
+    if (savedItemElement) {
+        const statusText = savedItemElement.querySelector('.saved-item-status');
+        if (statusText) {
+            // Update the progress text with pause status
+            if (paused) {
+                statusText.textContent = `paused (${progress}%)`;
+            } else {
+                statusText.textContent = `analyzing (${progress}%)`;
+            }
+            debugLog('✅ PLACEHOLDER UI UPDATED', {
+                itemId: itemId,
+                elementFound: true,
+                textUpdated: true
+            }, 'success');
+            return true;
+        } else {
+            debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'status text element not found', itemId: itemId }, 'warn');
+        }
+    } else {
+        debugLog('⚠️ PLACEHOLDER STATUS UPDATE SKIPPED', { reason: 'saved item element not found', itemId: itemId }, 'warn');
+    }
+
+    return false;
+}
+
+// Update saved item status when pause state changes
+async function updateSavedItemStatusFromPause(itemId, paused) {
+    debugLog('⏸️ PLACEHOLDER PAUSE STATUS CHANGED', {
+        itemId: itemId,
+        paused: paused,
+        action: paused ? 'paused' : 'resumed'
+    });
+
+    if (!inactiveSavesList) {
+        debugLog('⚠️ PLACEHOLDER PAUSE UPDATE SKIPPED', { reason: 'inactiveSavesList not available', itemId: itemId }, 'warn');
+        return;
+    }
+
     try {
+        // Update saved item in storage
+        let saved = [];
         if (window.electronAPI) {
             const result = await window.electronAPI.loadAnalyses();
             if (result.success) {
                 saved = result.data || [];
             }
         }
+        
+        const placeholderIndex = saved.findIndex(item => item.id === itemId);
+        if (placeholderIndex !== -1) {
+            saved[placeholderIndex].paused = paused;
+            debugLog('✅ PLACEHOLDER PAUSE UPDATED', {
+                itemId: itemId,
+                fileName: saved[placeholderIndex].fileName,
+                paused: paused
+            }, 'success');
+        } else {
+            debugLog('⚠️ PLACEHOLDER NOT FOUND FOR PAUSE UPDATE', { itemId: itemId }, 'warn');
+        }
+
+        // Also update all queued files' placeholders when pause state changes
+        let queuedFilesUpdated = 0;
+        saved.forEach((item, index) => {
+            if (item.status === 'processing' && item.id !== itemId) {
+                // Check if this item corresponds to a queued file in Home view
+                const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
+                if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
+                    // This is a queued file - update its paused state
+                    saved[index].paused = paused;
+                    queuedFilesUpdated++;
+                    debugLog('🔄 QUEUED PLACEHOLDER PAUSE UPDATED', {
+                        itemId: item.id,
+                        fileName: item.fileName,
+                        paused: paused
+                    });
+                }
+            }
+        });
+        
+        if (window.electronAPI) {
+            await window.electronAPI.saveAnalyses(saved);
+        }
+        
+        // Update saved files view if it's open - reload to show all updates
+        if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+            await loadSavedAnalyses();
+        }
     } catch (error) {
+        console.error('Error updating saved item pause status:', error);
+    }
+}
+
+async function loadSavedAnalyses() {
+    debugLog('📂 LOADING SAVED ANALYSES', { timestamp: new Date().toISOString() });
+
+    let saved = [];
+    try {
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+                debugLog('✅ SAVED ANALYSES LOADED', {
+                    count: saved.length,
+                    loadSuccess: result.success
+                }, 'success');
+            } else {
+                debugLog('⚠️ SAVED ANALYSES LOAD FAILED', { error: result.error }, 'warn');
+            }
+        } else {
+            debugLog('⚠️ SAVED ANALYSES LOAD SKIPPED', { reason: 'Electron API not available' }, 'warn');
+        }
+    } catch (error) {
+        debugLog('❌ SAVED ANALYSES LOAD ERROR', { error: error.message }, 'error');
         console.error('Error loading saved analyses:', error);
     }
     
-    savedAnalysesList.innerHTML = '';
+    // Migrate date fields: convert old `date` field to `dateCreated` and `dateEdited` if needed
+    let needsDateMigration = false;
+    let migratedCount = 0;
+    saved = saved.map(item => {
+        // If item has old `date` field but no `dateCreated` or `dateEdited`, migrate it
+        if (item.date && (!item.dateCreated || !item.dateEdited)) {
+            needsDateMigration = true;
+            migratedCount++;
+            const migratedItem = {
+                ...item,
+                dateCreated: item.dateCreated || item.date,
+                dateEdited: item.dateEdited || item.date
+            };
+            debugLog('🔄 MIGRATED DATE FIELDS', {
+                itemId: item.id,
+                fileName: item.fileName,
+                hadDate: !!item.date,
+                hadDateCreated: !!item.dateCreated,
+                hadDateEdited: !!item.dateEdited
+            });
+            return migratedItem;
+        }
+        // Ensure dateCreated and dateEdited exist (fallback to current date if missing)
+        if (!item.dateCreated || !item.dateEdited) {
+            needsDateMigration = true;
+            migratedCount++;
+            const now = new Date().toISOString();
+            const migratedItem = {
+                ...item,
+                dateCreated: item.dateCreated || item.date || now,
+                dateEdited: item.dateEdited || item.date || now
+            };
+            debugLog('🔄 ADDED MISSING DATE FIELDS', {
+                itemId: item.id,
+                fileName: item.fileName
+            });
+            return migratedItem;
+        }
+        return item;
+    });
+
+    // Clean up already completed files: remove status/progress fields from items that have analysis data
+    let needsCleanup = false;
+    let cleanedCount = 0;
+    saved = saved.map(item => {
+        // If item has analysis data but still has processing status, it's actually completed
+        if (item.analysis && item.status === 'processing') {
+            needsCleanup = true;
+            cleanedCount++;
+            // Create new object without status and progress fields
+            const { status, progress, paused, ...cleanedItem } = item;
+            debugLog('🧹 CLEANED COMPLETED ANALYSIS', {
+                itemId: item.id,
+                fileName: item.fileName,
+                hadStatus: item.status,
+                hadProgress: item.progress
+            });
+            return cleanedItem;
+        }
+        return item;
+    });
+
+    if (needsDateMigration) {
+        debugLog('🔄 DATE MIGRATION COMPLETED', {
+            migratedItems: migratedCount,
+            totalItems: saved.length
+        });
+    }
+
+    if (needsCleanup) {
+        debugLog('🧹 SAVED ANALYSES CLEANUP COMPLETED', {
+            cleanedItems: cleanedCount,
+            totalItems: saved.length
+        });
+    }
+
+    // Save migrated/cleaned data back to storage if needed
+    if ((needsDateMigration || needsCleanup) && window.electronAPI) {
+        try {
+            await window.electronAPI.saveAnalyses(saved);
+            debugLog('💾 MIGRATED/CLEANED DATA SAVED', { 
+                migratedItems: migratedCount,
+                cleanedItems: cleanedCount 
+            }, 'success');
+        } catch (error) {
+            console.error('Error saving migrated/cleaned analyses:', error);
+        }
+    }
+    
+    // Clear both lists
+    if (inactiveSavesList) inactiveSavesList.innerHTML = '';
+    if (activeSavesList) activeSavesList.innerHTML = '';
 
     if (saved.length === 0) {
-        savedAnalysesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No saved analyses yet.</p>';
+        if (activeSavesList) {
+            activeSavesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No saved analyses yet.</p>';
+        }
+        if (activeSavesHeader) activeSavesHeader.style.display = 'none';
         return;
     }
 
-    // Filter duplicates: keep only the latest version of each fileName
+    // Separate inactive (processing) items from active (completed) items
+    const inactiveItems = saved.filter(item => item.status === 'processing');
+    const activeItems = saved.filter(item => {
+        // Must have analysis data to be considered completed
+        if (!item.analysis) return false;
+        // Must not have processing status
+        if (item.status === 'processing') return false;
+        // Must have fileName
+        if (!item.fileName) return false;
+        return true;
+    });
+    
+    // Helper function to get date for sorting/comparison (prioritize dateEdited, fallback to dateCreated, then date)
+    const getDateForItem = (item) => {
+        return item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
+    };
+    
+    // For active items: filter duplicates - keep only the latest version of each fileName
     const fileMap = new Map();
-    saved.forEach(item => {
+    activeItems.forEach(item => {
         const fileName = item.fileName;
-        const itemDate = new Date(item.date);
+        if (!fileName) return; // Skip items without fileName
+        
+        const itemDate = new Date(getDateForItem(item));
         
         if (!fileMap.has(fileName)) {
-            // First occurrence of this fileName
             fileMap.set(fileName, item);
         } else {
-            // Compare dates and keep the newer one
-            const existingDate = new Date(fileMap.get(fileName).date);
-            if (itemDate > existingDate) {
+            const existing = fileMap.get(fileName);
+            const existingDate = new Date(getDateForItem(existing));
+            
+            // Prioritize items with analysis data if dates are equal or if existing has no analysis
+            if (!existing.analysis && item.analysis) {
+                fileMap.set(fileName, item);
+            } else if (itemDate > existingDate && item.analysis) {
                 fileMap.set(fileName, item);
             }
         }
     });
     
-    // Convert map to array and sort by date (newest first)
-    const filtered = Array.from(fileMap.values()).sort((a, b) => {
-        return new Date(b.date) - new Date(a.date);
+    // Convert active items map to array (will be sorted by sortActiveSaves function)
+    const filteredActive = Array.from(fileMap.values());
+    
+    // Sort inactive items by date (newest first)
+    const sortedInactive = inactiveItems.sort((a, b) => {
+        return new Date(getDateForItem(b)) - new Date(getDateForItem(a));
     });
+    
+    // Render inactive saves
+    renderInactiveSaves(sortedInactive);
+    
+    // Show/hide header and render active saves
+    debugLog('📊 ACTIVE SAVES FILTERING', {
+        totalSaved: saved.length,
+        inactiveCount: inactiveItems.length,
+        activeBeforeDedup: activeItems.length,
+        activeAfterDedup: filteredActive.length,
+        activeWithAnalysis: activeItems.filter(i => i.analysis).length
+    });
+    
+    if (filteredActive.length > 0) {
+        if (activeSavesHeader) activeSavesHeader.style.display = 'block';
+        renderActiveSaves(filteredActive);
+    } else {
+        if (activeSavesHeader) activeSavesHeader.style.display = 'none';
+        if (activeSavesList) {
+            activeSavesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No completed analyses yet.</p>';
+        }
+        
+        // Log why no items are showing
+        const itemsWithAnalysis = saved.filter(i => i.analysis && i.status !== 'processing');
+        debugLog('⚠️ NO ACTIVE SAVES DISPLAYED', {
+            itemsWithAnalysis: itemsWithAnalysis.length,
+            itemsWithoutStatus: saved.filter(i => !i.status && i.analysis).length,
+            allSavedCount: saved.length
+        }, 'warn');
+    }
+    
+    // Setup sorting handlers
+    setupSorting();
+    
+    return; // Exit early - rendering is done in separate functions
+}
 
-    if (filtered.length === 0) {
-        savedAnalysesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No saved analyses yet.</p>';
+// Helper function to render inactive saves (processing/paused/queued)
+function renderInactiveSaves(inactiveItems) {
+    if (!inactiveSavesList) return;
+    
+    inactiveSavesList.innerHTML = '';
+    
+    if (inactiveItems.length === 0) {
+        if (inactiveSavesSection) inactiveSavesSection.style.display = 'none';
         return;
     }
-
-    // Display filtered results (already sorted newest first)
-    filtered.forEach(item => {
+    
+    if (inactiveSavesSection) inactiveSavesSection.style.display = 'block';
+    
+    inactiveItems.forEach(item => {
         const savedItem = document.createElement('div');
-        savedItem.className = 'saved-item';
+        savedItem.className = 'saved-item saved-item-inactive';
+        savedItem.setAttribute('data-item-id', String(item.id));
         
-        const date = new Date(item.date);
-        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+        const progress = item.progress || 0;
+        const paused = item.paused || false;
+        
+        // Check if this item corresponds to a queued file in the Home view
+        let isQueuedInHome = false;
+        if (isAnalyzing) {
+            const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
+            if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
+                isQueuedInHome = true;
+            }
+        }
+        
+        // Determine status text: paused (queued) > paused (analyzing) > queued > analyzing
+        let processingStatusText;
+        if (isQueuedInHome && isPaused) {
+            processingStatusText = 'paused';
+        } else if (isQueuedInHome) {
+            processingStatusText = 'queued';
+        } else if (paused) {
+            processingStatusText = `paused (${progress}%)`;
+        } else {
+            processingStatusText = `analyzing (${progress}%)`;
+        }
+        
+        // Format: File Name / Date Created(Status) / Date Edited(-)
+        // Per spec: Date Created shows status instead of date
+        savedItem.innerHTML = `
+            <div class="saved-item-content-wrapper">
+                <div class="saved-item-content">
+                    <div class="saved-item-top-row">
+                        <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+                        <span class="saved-item-date-created">${processingStatusText}</span>
+                        <span class="saved-item-date-edited">-</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        inactiveSavesList.appendChild(savedItem);
+    });
+}
+
+// Helper function to render active saves (completed)
+function renderActiveSaves(activeItems) {
+    if (!activeSavesList) return;
+    
+    activeSavesList.innerHTML = '';
+    
+    // Sort active items based on current sort settings
+    const sorted = sortActiveSaves(activeItems);
+    
+    sorted.forEach(item => {
+        // Validate analysis data before rendering
+        if (item.analysis) {
+            const validation = validateAnalysisData(item.analysis);
+            if (!validation.valid) {
+                debugLog('⚠️ SKIPPING INVALID ANALYSIS IN RENDER', {
+                    itemId: item.id,
+                    fileName: item.fileName,
+                    error: validation.error
+                }, 'warn');
+                // Skip rendering invalid items
+                return;
+            }
+        }
+        
+        const savedItem = document.createElement('div');
+        savedItem.className = 'saved-item saved-item-active';
+        savedItem.setAttribute('data-item-id', String(item.id));
+        
+        // Format dates
+        const dateEdited = item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
+        const dateCreated = item.dateCreated || item.dateEdited || item.date || new Date().toISOString();
+        const dateEditedObj = new Date(dateEdited);
+        const dateCreatedObj = new Date(dateCreated);
+        const dateEditedStr = dateEditedObj.toLocaleDateString() + ' ' + dateEditedObj.toLocaleTimeString();
+        const dateCreatedStr = dateCreatedObj.toLocaleDateString() + ' ' + dateCreatedObj.toLocaleTimeString();
         
         // Add checkbox if in edit mode
         const checkboxHtml = isEditMode ? 
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
+        // Format: File Name / Date Edited / Date Created
         savedItem.innerHTML = `
             <div class="saved-item-content-wrapper">
                 ${checkboxHtml}
                 <div class="saved-item-content">
                     <div class="saved-item-top-row">
                         <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+                        <span class="saved-item-date-edited">${dateEditedStr}</span>
+                        <span class="saved-item-date-created">${dateCreatedStr}</span>
                         <button class="saved-item-rename-btn" data-item-id="${escapeHtml(item.id)}">rename</button>
                         <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
                         <button class="saved-item-save-btn" data-item-id="${escapeHtml(item.id)}" style="display: none;">save</button>
-                    </div>
-                    <div class="saved-item-bottom-row">
-                        <span class="saved-item-date">${dateStr}</span>
                     </div>
                 </div>
             </div>
@@ -2590,57 +4062,100 @@ async function loadSavedAnalyses() {
         const nameSpan = savedItem.querySelector('.saved-item-name');
         const saveBtn = savedItem.querySelector('.saved-item-save-btn');
         
+        // Per spec: Double-click to rename
+        let doubleClickTimer = null;
+        nameSpan.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            // Trigger rename mode (same as rename button click)
+            if (renameBtn && !isEditMode) {
+                renameBtn.click();
+            }
+        });
+        
         // Function to save the rename
         const saveRename = async () => {
             const newName = renameInput.value.trim();
             if (!newName) {
-                // Restore original if empty
+                renameInput.value = item.fileName;
+                return;
+            }
+            
+            // Validate filename: check for invalid characters, length, etc.
+            const validationResult = validateFileName(newName);
+            if (!validationResult.valid) {
+                debugLog('❌ INVALID FILENAME', {
+                    fileName: newName,
+                    error: validationResult.error
+                }, 'error');
+                alert(validationResult.error);
+                renameInput.value = item.fileName;
+                return;
+            }
+            
+            // Check for duplicate filename before renaming
+            let saved = [];
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadAnalyses();
+                if (result.success) {
+                    saved = result.data || [];
+                }
+            }
+            
+            // Check if new name already exists (excluding current item)
+            const duplicateItem = saved.find(s => 
+                s.fileName === newName && 
+                s.id !== item.id &&
+                s.status !== 'processing' && // Don't check against processing items
+                s.analysis // Must be completed (have analysis data)
+            );
+            
+            if (duplicateItem) {
+                alert('A file with this name already exists.');
                 renameInput.value = item.fileName;
                 return;
             }
             
             if (newName !== item.fileName) {
-                // Update the item
                 item.fileName = newName;
                 
-                // Save updated analyses
                 try {
-                    let saved = [];
-                    if (window.electronAPI) {
-                        const result = await window.electronAPI.loadAnalyses();
-                        if (result.success) {
-                            saved = result.data || [];
-                        }
-                    }
-                    
-                    // Find and update the item
                     const index = saved.findIndex(s => s.id === item.id);
                     if (index !== -1) {
                         saved[index].fileName = newName;
+                        saved[index].dateEdited = new Date().toISOString();
+                        if (!saved[index].dateCreated) {
+                            saved[index].dateCreated = saved[index].dateEdited || new Date().toISOString();
+                        }
                         
                         if (window.electronAPI) {
                             await window.electronAPI.saveAnalyses(saved);
-                            // Update the displayed name
                             nameSpan.textContent = newName;
+                            item.fileName = newName;
+                            item.dateEdited = saved[index].dateEdited;
+                            // Reload to update date display
+                            await loadSavedAnalyses();
                         }
                     }
                 } catch (error) {
-                    console.error('Error renaming:', error);
+                    debugLog('❌ ERROR RENAMING FILE', {
+                        itemId: item.id,
+                        oldName: item.fileName,
+                        newName: newName,
+                        error: error.message,
+                        stack: error.stack
+                    }, 'error');
                     alert('Error renaming file: ' + error.message);
-                    // Restore original value on error
                     renameInput.value = item.fileName;
                     return;
                 }
             }
             
-            // Exit rename mode
             renameBtn.style.display = '';
             nameSpan.style.display = '';
             renameInput.style.display = 'none';
             if (saveBtn) saveBtn.style.display = 'none';
         };
         
-        // Function to exit rename mode without saving
         const cancelRename = () => {
             renameInput.value = item.fileName;
             renameBtn.style.display = '';
@@ -2650,13 +4165,10 @@ async function loadSavedAnalyses() {
         };
         
         if (renameBtn && renameInput && nameSpan) {
-            // Click rename button to show input field
             renameBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                // Hide button and name, show input in place of name
                 renameBtn.style.display = 'none';
                 nameSpan.style.display = 'none';
-                // Move input to replace the name in the top row
                 const topRow = savedItem.querySelector('.saved-item-top-row');
                 topRow.insertBefore(renameInput, renameBtn);
                 renameInput.style.display = 'block';
@@ -2665,7 +4177,6 @@ async function loadSavedAnalyses() {
                 renameInput.select();
             });
             
-            // Save button click handler
             if (saveBtn) {
                 saveBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
@@ -2673,7 +4184,6 @@ async function loadSavedAnalyses() {
                 });
             }
             
-            // Enter key saves, Escape cancels rename
             renameInput.addEventListener('keydown', async (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
@@ -2684,24 +4194,14 @@ async function loadSavedAnalyses() {
                 }
             });
             
-            // Prevent item click when clicking on rename button, input, or save button
-            renameBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-            renameInput.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
-            if (saveBtn) {
-                saveBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                });
-            }
+            renameBtn.addEventListener('click', (e) => e.stopPropagation());
+            renameInput.addEventListener('click', (e) => e.stopPropagation());
+            if (saveBtn) saveBtn.addEventListener('click', (e) => e.stopPropagation());
         }
         
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Don't trigger if clicking rename button, input, or save button
                 if (e.target.classList.contains('saved-item-rename-btn') || 
                     e.target.classList.contains('saved-item-rename-input') ||
                     e.target.classList.contains('saved-item-save-btn')) {
@@ -2710,14 +4210,10 @@ async function loadSavedAnalyses() {
                 await reopenAnalysis(item);
             });
         } else {
-            // In edit mode, clicking the checkbox should toggle it
             const checkbox = savedItem.querySelector('.saved-item-checkbox');
             if (checkbox) {
-                checkbox.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent item click
-                });
+                checkbox.addEventListener('click', (e) => e.stopPropagation());
             }
-            // Clicking the item should toggle checkbox
             savedItem.addEventListener('click', (e) => {
                 if (e.target.type !== 'checkbox' && 
                     !e.target.classList.contains('saved-item-rename-btn') &&
@@ -2731,11 +4227,78 @@ async function loadSavedAnalyses() {
             });
         }
         
-        savedAnalysesList.appendChild(savedItem);
+        activeSavesList.appendChild(savedItem);
+    });
+}
+
+// Helper function to sort active saves
+function sortActiveSaves(items) {
+    const getDateForItem = (item) => {
+        return item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
+    };
+    
+    return [...items].sort((a, b) => {
+        let comparison = 0;
+        
+        if (currentSortColumn === 'fileName') {
+            comparison = a.fileName.localeCompare(b.fileName);
+        } else if (currentSortColumn === 'dateEdited') {
+            comparison = new Date(getDateForItem(a)) - new Date(getDateForItem(b));
+        } else if (currentSortColumn === 'dateCreated') {
+            const dateA = new Date(a.dateCreated || a.dateEdited || a.date || new Date().toISOString());
+            const dateB = new Date(b.dateCreated || b.dateEdited || b.date || new Date().toISOString());
+            comparison = dateA - dateB;
+        }
+        
+        return currentSortDirection === 'asc' ? comparison : -comparison;
+    });
+}
+
+// Setup sorting handlers
+function setupSorting() {
+    if (!activeSavesHeader) return;
+    
+    const sortableColumns = activeSavesHeader.querySelectorAll('.sortable-column');
+    sortableColumns.forEach(column => {
+        column.addEventListener('click', () => {
+            const sortColumn = column.getAttribute('data-sort');
+            
+            // Update sort direction if clicking same column, otherwise reset to desc
+            if (sortColumn === currentSortColumn) {
+                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortColumn = sortColumn;
+                currentSortDirection = 'desc';
+            }
+            
+            // Update arrow indicators
+            sortableColumns.forEach(col => {
+                const arrow = col.querySelector('.sort-arrow');
+                if (col.getAttribute('data-sort') === currentSortColumn) {
+                    arrow.textContent = currentSortDirection === 'asc' ? '▲' : '▼';
+                } else {
+                    arrow.textContent = '';
+                }
+            });
+            
+            // Reload to apply sort
+            loadSavedAnalyses();
+        });
     });
 }
 
 async function reopenAnalysis(savedItem) {
+    debugLog('🔄 REOPENING SAVED ANALYSIS', {
+        itemId: savedItem.id,
+        fileName: savedItem.fileName,
+        date: savedItem.date,
+        hasAnalysis: !!savedItem.analysis,
+        translationsCount: savedItem.analysis?.translations?.length || 0,
+        expressionsCount: savedItem.analysis?.expressions?.length || 0,
+        chatMessagesCount: savedItem.chatHistory?.length || 0,
+        hasSubtitleData: !!savedItem.subtitleData
+    });
+
     await reinitializeAPIKey();
     currentAnalysis = savedItem.analysis;
     currentChatHistory = savedItem.chatHistory || [];
@@ -2849,6 +4412,35 @@ async function reopenAnalysis(savedItem) {
             uploadSection.style.display = 'flex';
         }
     });
+
+    // Debug Console
+    if (debugBtn) {
+        debugBtn.addEventListener('click', () => {
+            const isVisible = debugConsole.style.display !== 'none';
+            debugConsole.style.display = isVisible ? 'none' : 'flex';
+            debugLog('🐛 DEBUG CONSOLE TOGGLED', {
+                visible: !isVisible,
+                action: isVisible ? 'hidden' : 'shown'
+            });
+        });
+    }
+
+    if (clearDebugBtn) {
+        clearDebugBtn.addEventListener('click', () => {
+            const debugMessages = document.getElementById('debugMessages');
+            if (debugMessages) {
+                debugMessages.innerHTML = '';
+                debugLog('🧹 DEBUG MESSAGES CLEARED', { action: 'manual_clear' });
+            }
+        });
+    }
+
+    if (closeDebugBtn) {
+        closeDebugBtn.addEventListener('click', () => {
+            debugConsole.style.display = 'none';
+            debugLog('❌ DEBUG CONSOLE CLOSED', { action: 'user_closed' });
+        });
+    }
 
     saveApiKeyBtn.addEventListener('click', async () => {
         const newApiKey = apiKeyInput.value.trim();
@@ -2996,12 +4588,6 @@ async function openStudyModal(type, item, index, timestamp = null) {
     studyItemContent.innerHTML = '';
     studyExpressionsContent.innerHTML = '';
     studyExpressionsSection.style.display = 'block'; // Always show the section
-    
-    // Sync study level checkboxes with current filter state
-    const studyLevelCheckboxes = document.querySelectorAll('.study-level-checkbox');
-    studyLevelCheckboxes.forEach(checkbox => {
-        checkbox.checked = selectedStudyLevels.includes(checkbox.value);
-    });
     
     if (type === 'translation') {
         studyTitle.textContent = 'Line-by-Line Study';
@@ -3376,14 +4962,14 @@ function displayStudyExpressions() {
         expressionsToShow = [];
     }
     
-    // Filter expressions by selected study levels
+    // Filter expressions by selected levels from main window filter
     expressionsToShow = expressionsToShow.filter(expr => {
         // If expression has no level field, show it (backward compatibility)
         if (!expr.level) {
             return true;
         }
-        // Only show expressions matching selected study levels
-        return selectedStudyLevels.includes(expr.level);
+        // Only show expressions matching selected levels from main window filter
+        return selectedLevels.includes(expr.level);
     });
     
     if (expressionsToShow.length > 0) {
@@ -3391,16 +4977,18 @@ function displayStudyExpressions() {
             const exprDiv = document.createElement('div');
             exprDiv.className = 'study-expression-item';
             
-            // Add level tooltip if level exists
-            const levelText = expr.level ? `Level: ${expr.level}` : '';
-            const tooltipAttr = levelText ? `title="${levelText}"` : '';
-            
-            let exprHtml = `<div class="study-expression-header" ${tooltipAttr}>`;
-            exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+            // Add data attribute for level (for hover popup)
             if (expr.level) {
-                exprHtml += `<span class="study-expression-level">${escapeHtml(expr.level)}</span>`;
+                exprDiv.setAttribute('data-expression-level', expr.level);
             }
+            
+            let exprHtml = `<div class="study-expression-header">`;
+            exprHtml += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
+            // Level badge removed - will show in hover popup instead
             exprHtml += `</div>`;
+            
+            // No inline popup markup; we will use a single global fixed-position popup
+            
             if (expr.meaning) {
                 exprHtml += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
             }
@@ -3409,6 +4997,32 @@ function displayStudyExpressions() {
             }
             
             exprDiv.innerHTML = exprHtml;
+
+            // Add hover event listeners to show a global (fixed) level popup so it isn't clipped
+            if (expr.level) {
+                let globalPopup = document.getElementById('globalLevelPopup');
+                if (!globalPopup) {
+                    globalPopup = document.createElement('div');
+                    globalPopup.id = 'globalLevelPopup';
+                    globalPopup.className = 'level-popup-global';
+                    document.body.appendChild(globalPopup);
+                }
+                const levelText = `${escapeHtml(expr.level)}`;
+                exprDiv.addEventListener('mouseenter', () => {
+                    globalPopup.textContent = levelText;
+                    // Position to the left of the expression item, vertically centered
+                    const rect = exprDiv.getBoundingClientRect();
+                    const top = rect.top + (rect.height / 2);
+                    const left = rect.left; // anchor at left edge of item
+                    globalPopup.style.top = `${top}px`;
+                    globalPopup.style.left = `${left}px`;
+                    globalPopup.classList.add('show');
+                });
+                exprDiv.addEventListener('mouseleave', () => {
+                    globalPopup.classList.remove('show');
+                });
+            }
+            
             studyExpressionsContent.appendChild(exprDiv);
         });
     } else {
@@ -4045,4 +5659,127 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// Validate analysis data structure
+function validateAnalysisData(analysisData) {
+    if (!analysisData || typeof analysisData !== 'object') {
+        return { valid: false, error: 'Analysis data is not an object' };
+    }
+    
+    // Check for required fields
+    if (!Array.isArray(analysisData.translations)) {
+        return { valid: false, error: 'Analysis data missing translations array' };
+    }
+    
+    if (!Array.isArray(analysisData.expressions)) {
+        return { valid: false, error: 'Analysis data missing expressions array' };
+    }
+    
+    return { valid: true };
+}
+
+// Validate filename for rename operations
+function validateFileName(fileName) {
+    if (!fileName || typeof fileName !== 'string') {
+        return { valid: false, error: 'Filename cannot be empty' };
+    }
+    
+    const trimmed = fileName.trim();
+    if (trimmed.length === 0) {
+        return { valid: false, error: 'Filename cannot be empty' };
+    }
+    
+    // Maximum length check (reasonable limit for filenames)
+    const MAX_FILENAME_LENGTH = 255;
+    if (trimmed.length > MAX_FILENAME_LENGTH) {
+        return { valid: false, error: `Filename cannot exceed ${MAX_FILENAME_LENGTH} characters` };
+    }
+    
+    // Check for invalid characters (common invalid filename characters)
+    // Windows: < > : " | ? * \
+    // Unix: / (forward slash)
+    const invalidChars = /[<>:"|?*\\/]/;
+    if (invalidChars.test(trimmed)) {
+        return { valid: false, error: 'Filename contains invalid characters: < > : " | ? * \\ /' };
+    }
+    
+    // Check for reserved names (Windows)
+    const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'];
+    const upperName = trimmed.toUpperCase();
+    if (reservedNames.includes(upperName)) {
+        return { valid: false, error: 'Filename cannot be a reserved Windows name' };
+    }
+    
+    // Check for leading/trailing spaces or dots (Windows doesn't allow these)
+    if (trimmed.startsWith('.') || trimmed.endsWith('.') || trimmed.endsWith(' ')) {
+        return { valid: false, error: 'Filename cannot start with a dot or end with a dot or space' };
+    }
+    
+    return { valid: true };
+}
+
+// Cleanup unfinished files (for exit handling)
+async function cleanupUnfinishedFiles() {
+    debugLog('🧹 CLEANUP UNFINISHED FILES', {
+        totalProjects: fileProjects.length
+    });
+    
+    // Remove unfinished files from fileProjects
+    const unfinishedCount = fileProjects.filter(p => 
+        p.status === 'analyzing' || p.status === 'paused' || p.status === 'queued'
+    ).length;
+    
+    fileProjects = fileProjects.filter(p => 
+        p.status !== 'analyzing' && p.status !== 'paused' && p.status !== 'queued'
+    );
+    
+    // window.fileProjects is auto-synced via getter
+    
+    // Remove inactive saves from saved analyses
+    try {
+        let saved = [];
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+            }
+        }
+        
+        // Filter out processing items
+        const cleanedSaved = saved.filter(item => item.status !== 'processing');
+        
+        if (window.electronAPI && cleanedSaved.length !== saved.length) {
+            await window.electronAPI.saveAnalyses(cleanedSaved);
+            debugLog('💾 CLEANED SAVED ANALYSES', {
+                removedCount: saved.length - cleanedSaved.length,
+                remainingCount: cleanedSaved.length
+            });
+        }
+        
+        // Refresh UI if save view is open
+        if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+            await loadSavedAnalyses();
+        }
+        
+        // Refresh file projects list
+        renderFileProjectsList();
+        
+        // Reset analysis state
+        isAnalyzing = false;
+        isPaused = false;
+        currentProjectId = null;
+        currentPlaceholderId = null;
+        
+        debugLog('✅ CLEANUP COMPLETED', {
+            removedProjects: unfinishedCount,
+            remainingProjects: fileProjects.length
+        }, 'success');
+    } catch (error) {
+        console.error('Error during cleanup:', error);
+        debugLog('❌ CLEANUP ERROR', { error: error.message }, 'error');
+    }
+}
+
+// Expose cleanup function to window for IPC access
+window.cleanupUnfinishedFiles = cleanupUnfinishedFiles;
 

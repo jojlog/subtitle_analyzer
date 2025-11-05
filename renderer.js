@@ -1857,7 +1857,13 @@ async function analyzeProject(projectId) {
                 }
                 debugLog('💾 AUTOSAVE DATA LOADED', {
                     savedCount: saved.length,
-                    loadSuccess: result.success
+                    loadSuccess: result.success,
+                    loadedFileNames: saved.map(item => ({
+                        id: item.id,
+                        fileName: item.fileName,
+                        status: item.status,
+                        hasAnalysis: !!item.analysis
+                    }))
                 });
             }
             
@@ -1868,6 +1874,13 @@ async function analyzeProject(projectId) {
                 return;
             }
             const finalFileName = currentProject.fileName;
+            
+            debugLog('🔍 AUTOSAVE PREPARING', {
+                finalFileName: finalFileName,
+                placeholderId: placeholderId,
+                savedCountBefore: saved.length,
+                savedFileNames: saved.map(item => item.fileName)
+            });
             
             // Check if duplicate exists (excluding current placeholder)
             const duplicateIndex = saved.findIndex(item =>
@@ -1959,10 +1972,93 @@ async function analyzeProject(projectId) {
             
             // Save to file storage
             if (window.electronAPI) {
+                // CRITICAL: Reload fresh data right before saving to avoid overwriting recent saves
+                // This ensures we have the latest data even if another save happened between our load and save
+                let freshSaved = saved;
+                try {
+                    const freshResult = await window.electronAPI.loadAnalyses();
+                    if (freshResult.success && freshResult.data) {
+                        freshSaved = freshResult.data || [];
+                        debugLog('🔄 RELOADED FRESH DATA BEFORE AUTOSAVE', {
+                            freshCount: freshSaved.length,
+                            previousCount: saved.length
+                        });
+                        
+                        // Find our current item in fresh data and update it
+                        if (placeholderId) {
+                            const placeholderIndex = freshSaved.findIndex(item => item.id === placeholderId);
+                            if (placeholderIndex !== -1) {
+                                // Replace placeholder with completed analysis
+                                freshSaved[placeholderIndex] = completedAnalysis;
+                                debugLog('🔄 UPDATED PLACEHOLDER IN FRESH DATA', {
+                                    placeholderId: placeholderId,
+                                    fileName: finalFileName
+                                });
+                            } else {
+                                // Placeholder not found in fresh data - check for duplicate
+                                const duplicateIndex = freshSaved.findIndex(item =>
+                                    item.fileName === finalFileName &&
+                                    item.status !== 'processing'
+                                );
+                                if (duplicateIndex !== -1) {
+                                    // Overwrite duplicate
+                                    freshSaved[duplicateIndex] = completedAnalysis;
+                                    debugLog('🔄 OVERWROTE DUPLICATE IN FRESH DATA', {
+                                        fileName: finalFileName
+                                    });
+                                } else {
+                                    // No duplicate, add new entry
+                                    freshSaved.push(completedAnalysis);
+                                    debugLog('➕ ADDED NEW ENTRY TO FRESH DATA', {
+                                        fileName: finalFileName
+                                    });
+                                }
+                            }
+                        } else {
+                            // No placeholder - check for duplicate to overwrite or add new
+                            const duplicateIndex = freshSaved.findIndex(item =>
+                                item.fileName === finalFileName &&
+                                item.status !== 'processing'
+                            );
+                            if (duplicateIndex !== -1) {
+                                // Overwrite duplicate
+                                freshSaved[duplicateIndex] = completedAnalysis;
+                                debugLog('🔄 OVERWROTE DUPLICATE IN FRESH DATA', {
+                                    fileName: finalFileName
+                                });
+                            } else {
+                                // No duplicate, add new entry
+                                freshSaved.push(completedAnalysis);
+                                debugLog('➕ ADDED NEW ENTRY TO FRESH DATA', {
+                                    fileName: finalFileName
+                                });
+                            }
+                        }
+                        
+                        // Keep only last 50 analyses
+                        if (freshSaved.length > 50) {
+                            freshSaved.shift();
+                        }
+                        
+                        saved = freshSaved;
+                    }
+                } catch (error) {
+                    debugLog('⚠️ FAILED TO RELOAD FRESH DATA BEFORE AUTOSAVE', {
+                        error: error.message
+                    }, 'warn');
+                    // Continue with original saved data
+                }
+                
                 debugLog('💾 AUTOSAVE EXECUTING', {
                     finalFileName: finalFileName,
                     savedCount: saved.length,
-                    placeholderReplaced: !!placeholderId
+                    placeholderReplaced: !!placeholderId,
+                    savedFileNames: saved.map(item => ({
+                        id: item.id,
+                        fileName: item.fileName,
+                        status: item.status,
+                        hasAnalysis: !!item.analysis
+                    }))
                 });
 
                 const saveResult = await window.electronAPI.saveAnalyses(saved);
@@ -1983,7 +2079,9 @@ async function analyzeProject(projectId) {
             
             // Always refresh saved files view when analysis completes
             // This ensures the view updates even if user navigates to it later
-            if (savedAnalysesView) {
+            // Only reload if the view is actually visible to avoid unnecessary saves
+            if (savedAnalysesView && savedAnalysesView.style.display === 'flex') {
+                await new Promise(resolve => setTimeout(resolve, 200));
                 await loadSavedAnalyses();
             }
         } catch (error) {
@@ -2539,6 +2637,13 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
 function displayAnalysis(data) {
     // Display translations
     translationsContent.innerHTML = '';
+    
+    // Guard against null/undefined data
+    if (!data) {
+        debugLog('⚠️ DISPLAY ANALYSIS CALLED WITH NULL/UNDEFINED DATA', {}, 'warn');
+        translationsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No analysis data available.</p>';
+        return;
+    }
     
     if (data.rawResponse) {
         // Fallback: display raw response
@@ -3305,7 +3410,13 @@ async function loadSavedAnalyses() {
                 saved = result.data || [];
                 debugLog('✅ SAVED ANALYSES LOADED', {
                     count: saved.length,
-                    loadSuccess: result.success
+                    loadSuccess: result.success,
+                    loadedFileNames: saved.map(item => ({
+                        id: item.id,
+                        fileName: item.fileName,
+                        status: item.status,
+                        hasAnalysis: !!item.analysis
+                    }))
                 }, 'success');
             } else {
                 debugLog('⚠️ SAVED ANALYSES LOAD FAILED', { error: result.error }, 'warn');
@@ -3318,11 +3429,88 @@ async function loadSavedAnalyses() {
         console.error('Error loading saved analyses:', error);
     }
     
+    // Migrate missing date/fileName fields
+    let needsMigration = false;
+    let migratedCount = 0;
+    
+    saved = saved.map(item => {
+        const migratedItem = { ...item };
+        
+        // Add missing date
+        if (!migratedItem.date) {
+            needsMigration = true;
+            migratedCount++;
+            migratedItem.date = new Date().toISOString();
+            debugLog('🔄 MIGRATED MISSING DATE', {
+                itemId: item.id,
+                fileName: item.fileName || 'unknown'
+            });
+        }
+        
+        // Add missing fileName (or skip if critical)
+        if (!migratedItem.fileName) {
+            needsMigration = true;
+            migratedCount++;
+            migratedItem.fileName = 'unknown';
+            debugLog('🔄 MIGRATED MISSING FILENAME', {
+                itemId: item.id,
+                addedFileName: 'unknown'
+            });
+        }
+        
+        return migratedItem;
+    });
+    
+    if (needsMigration) {
+        debugLog('🔄 MIGRATION COMPLETED', {
+            migratedItems: migratedCount,
+            totalItems: saved.length
+        });
+        
+        // Save migrated data back if migration occurred
+        // IMPORTANT: Only save if actually needed and not during rapid saves
+        // Skip save if we just loaded to avoid race conditions
+        if (window.electronAPI && needsMigration) {
+            try {
+                // Small delay to ensure any pending saves complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                // Reload fresh data right before saving migration
+                const freshResult = await window.electronAPI.loadAnalyses();
+                if (freshResult.success && freshResult.data) {
+                    // Re-apply migration to fresh data
+                    const freshSaved = freshResult.data || [];
+                    saved = freshSaved.map(item => {
+                        const migratedItem = { ...item };
+                        if (!migratedItem.date) {
+                            migratedItem.date = new Date().toISOString();
+                        }
+                        if (!migratedItem.fileName) {
+                            migratedItem.fileName = 'unknown';
+                        }
+                        return migratedItem;
+                    });
+                    debugLog('🔄 RELOADED FRESH DATA BEFORE MIGRATION SAVE', { count: saved.length });
+                }
+                
+                await window.electronAPI.saveAnalyses(saved);
+                debugLog('💾 MIGRATED DATA SAVED', { migratedItems: migratedCount }, 'success');
+            } catch (error) {
+                console.error('Error saving migrated analyses:', error);
+                debugLog('❌ FAILED TO SAVE MIGRATED DATA', { error: error.message }, 'error');
+            }
+        }
+    }
+    
     // Clean up already completed files: remove status/progress fields from items that have analysis data
+    // IMPORTANT: Apply cleanup immediately in-memory so cleaned items are used for display
+    // This ensures items with analysis data are treated as completed even if they still have status
     let needsCleanup = false;
     let cleanedCount = 0;
+    
     saved = saved.map(item => {
         // If item has analysis data but still has processing status, it's actually completed
+        // Remove status/progress fields immediately so the item is properly categorized
         if (item.analysis && item.status === 'processing') {
             needsCleanup = true;
             cleanedCount++;
@@ -3336,6 +3524,13 @@ async function loadSavedAnalyses() {
             });
             return cleanedItem;
         }
+        // Also clean items that have analysis but status is undefined/null/empty string
+        // These should be treated as completed
+        if (item.analysis && (!item.status || item.status === '')) {
+            // Remove any existing status/progress fields to ensure clean state
+            const { status, progress, ...cleanedItem } = item;
+            return cleanedItem;
+        }
         return item;
     });
 
@@ -3347,13 +3542,40 @@ async function loadSavedAnalyses() {
     }
 
     // Save cleaned data back to storage if cleanup was needed
+    // IMPORTANT: Only save if actually needed and not during rapid saves
+    // Skip save if we just loaded to avoid race conditions
     if (needsCleanup && window.electronAPI) {
         try {
+            // Small delay to ensure any pending saves complete
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Reload fresh data right before saving cleanup
+            const freshResult = await window.electronAPI.loadAnalyses();
+            if (freshResult.success && freshResult.data) {
+                // Re-apply cleanup to fresh data
+                const freshSaved = freshResult.data || [];
+                saved = freshSaved.map(item => {
+                    if (item.analysis && item.status === 'processing') {
+                        const { status, progress, ...cleanedItem } = item;
+                        return cleanedItem;
+                    }
+                    return item;
+                });
+                debugLog('🔄 RELOADED FRESH DATA BEFORE CLEANUP SAVE', { count: saved.length });
+            }
+            
             await window.electronAPI.saveAnalyses(saved);
             debugLog('💾 CLEANED DATA SAVED', { cleanedItems: cleanedCount }, 'success');
         } catch (error) {
             console.error('Error saving cleaned analyses:', error);
+            debugLog('❌ FAILED TO SAVE CLEANED DATA', { error: error.message }, 'error');
         }
+    }
+    
+    // Null check for savedAnalysesList
+    if (!savedAnalysesList) {
+        debugLog('❌ CANNOT DISPLAY SAVED ANALYSES', { reason: 'savedAnalysesList DOM element not found' }, 'error');
+        return;
     }
     
     savedAnalysesList.innerHTML = '';
@@ -3367,36 +3589,103 @@ async function loadSavedAnalyses() {
     const processingItems = saved.filter(item => item.status === 'processing');
     const completedItems = saved.filter(item => !item.status || item.status !== 'processing');
     
+    debugLog('📊 ITEMS SEPARATED', {
+        totalSaved: saved.length,
+        processingItems: processingItems.length,
+        completedItems: completedItems.length,
+        processingFileNames: processingItems.map(i => i.fileName),
+        completedFileNames: completedItems.map(i => i.fileName)
+    });
+    
     // For completed items: filter duplicates - keep only the latest version of each fileName
     const fileMap = new Map();
     completedItems.forEach(item => {
+        // Validate fileName
         const fileName = item.fileName;
-        const itemDate = new Date(item.date);
+        if (!fileName || typeof fileName !== 'string' || fileName.trim() === '') {
+            debugLog('⚠️ SKIPPED ITEM', { reason: 'missing or invalid fileName', itemId: item.id }, 'warn');
+            return;
+        }
+        
+        // Validate and parse date
+        let itemDate;
+        try {
+            if (!item.date) {
+                itemDate = new Date(); // Use current date as fallback
+            } else {
+                itemDate = new Date(item.date);
+                if (isNaN(itemDate.getTime())) {
+                    itemDate = new Date(); // Use current date if invalid
+                }
+            }
+        } catch (error) {
+            itemDate = new Date(); // Use current date on error
+        }
         
         if (!fileMap.has(fileName)) {
             // First occurrence of this fileName
             fileMap.set(fileName, item);
         } else {
             // Compare dates and keep the newer one
-            const existingDate = new Date(fileMap.get(fileName).date);
+            let existingDate;
+            try {
+                const existingItem = fileMap.get(fileName);
+                existingDate = new Date(existingItem.date);
+                if (isNaN(existingDate.getTime())) {
+                    existingDate = new Date(0); // Use epoch if invalid
+                }
+            } catch (error) {
+                existingDate = new Date(0); // Use epoch on error
+            }
+            
             if (itemDate > existingDate) {
                 fileMap.set(fileName, item);
             }
         }
     });
     
+    debugLog('📊 DEDUPLICATION COMPLETE', {
+        completedItemsBefore: completedItems.length,
+        completedItemsAfter: fileMap.size,
+        keptFileNames: Array.from(fileMap.keys()),
+        deduplicatedCount: completedItems.length - fileMap.size
+    });
+    
     // Convert completed items map to array and sort by date (newest first)
     const filteredCompleted = Array.from(fileMap.values()).sort((a, b) => {
-        return new Date(b.date) - new Date(a.date);
+        try {
+            const dateA = new Date(a.date || new Date());
+            const dateB = new Date(b.date || new Date());
+            if (isNaN(dateA.getTime())) return 1; // Invalid dates go to end
+            if (isNaN(dateB.getTime())) return -1;
+            return dateB - dateA;
+        } catch (error) {
+            return 0; // Keep order if comparison fails
+        }
     });
     
     // Sort processing items by date (newest first) and combine with completed items
     const sortedProcessing = processingItems.sort((a, b) => {
-        return new Date(b.date) - new Date(a.date);
+        try {
+            const dateA = new Date(a.date || new Date());
+            const dateB = new Date(b.date || new Date());
+            if (isNaN(dateA.getTime())) return 1; // Invalid dates go to end
+            if (isNaN(dateB.getTime())) return -1;
+            return dateB - dateA;
+        } catch (error) {
+            return 0; // Keep order if comparison fails
+        }
     });
     
     // Show processing items FIRST, then completed items
     const filtered = [...sortedProcessing, ...filteredCompleted];
+    
+    debugLog('📊 FINAL FILTERING SUMMARY', {
+        processingItems: sortedProcessing.length,
+        completedItemsAfterDedup: filteredCompleted.length,
+        totalFiltered: filtered.length,
+        finalFileNames: filtered.map(i => i.fileName)
+    });
 
     if (filtered.length === 0) {
         savedAnalysesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No saved analyses yet.</p>';
@@ -3414,7 +3703,20 @@ async function loadSavedAnalyses() {
         // Add data-item-id attribute for easy lookup
         savedItem.setAttribute('data-item-id', String(item.id));
         
-        const date = new Date(item.date);
+        // Validate and parse date for display
+        let date;
+        try {
+            if (!item.date) {
+                date = new Date(); // Use current date as fallback
+            } else {
+                date = new Date(item.date);
+                if (isNaN(date.getTime())) {
+                    date = new Date(); // Use current date if invalid
+                }
+            }
+        } catch (error) {
+            date = new Date(); // Use current date on error
+        }
         const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
         
         // Add checkbox if in edit mode
@@ -3647,6 +3949,33 @@ async function reopenAnalysis(savedItem) {
         chatMessagesCount: savedItem.chatHistory?.length || 0,
         hasSubtitleData: !!savedItem.subtitleData
     });
+
+    // Validate that analysis data exists
+    if (!savedItem.analysis) {
+        debugLog('❌ CANNOT REOPEN ANALYSIS', {
+            itemId: savedItem.id,
+            fileName: savedItem.fileName,
+            reason: 'No analysis data found'
+        }, 'error');
+        
+        // Show error message to user
+        if (resultsSection && translationsContent) {
+            resultsSection.style.display = 'flex';
+            savedAnalysesView.style.display = 'none';
+            uploadSection.style.display = 'none';
+            translationsContent.innerHTML = `
+                <div style="color: #ff6b6b; text-align: center; padding: 24px;">
+                    <p style="font-size: 16px; margin-bottom: 8px;">⚠️ Analysis data not found</p>
+                    <p style="color: #999; font-size: 14px;">The saved analysis for "${escapeHtml(savedItem.fileName || 'unknown file')}" appears to be incomplete or corrupted.</p>
+                    <p style="color: #999; font-size: 14px; margin-top: 8px;">This file may still be processing or the analysis data was not saved correctly.</p>
+                </div>
+            `;
+            fileName.textContent = savedItem.fileName || 'Unknown File';
+            scriptName.textContent = savedItem.fileName || 'Unknown File';
+            fileInfo.style.display = 'flex';
+        }
+        return;
+    }
 
     await reinitializeAPIKey();
     currentAnalysis = savedItem.analysis;

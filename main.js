@@ -8,6 +8,9 @@ const crypto = require('crypto');
 
 let mainWindow;
 
+// Write queue for saved_analyses.json to prevent corruption from concurrent writes
+let saveAnalysesQueue = Promise.resolve();
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -114,22 +117,106 @@ async function setSecureFilePermissions(filePath) {
 }
 
 // IPC Handlers for saved analyses
+// Use a queue to serialize writes and prevent corruption
 ipcMain.handle('save-analyses', async (event, data) => {
-  try {
-    const filePath = getDataFilePath('saved_analyses.json');
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
-    return { success: true };
-  } catch (error) {
-    console.error('Error saving analyses:', error);
-    return { success: false, error: error.message };
-  }
+  // Queue this write operation to ensure no concurrent writes
+  saveAnalysesQueue = saveAnalysesQueue.then(async () => {
+    try {
+      const filePath = getDataFilePath('saved_analyses.json');
+      // Validate data before writing
+      if (!Array.isArray(data)) {
+        console.error('Invalid data format: expected array, got', typeof data);
+        return { success: false, error: 'Invalid data format' };
+      }
+      
+      // Create temporary file first, then rename (atomic write)
+      const tempPath = filePath + '.tmp';
+      const jsonString = JSON.stringify(data, null, 2);
+      await fs.writeFile(tempPath, jsonString, 'utf8');
+      
+      // Atomic rename - this ensures the file is either fully written or not at all
+      await fs.rename(tempPath, filePath);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error saving analyses:', error);
+      // Clean up temp file if it exists
+      try {
+        const tempPath = getDataFilePath('saved_analyses.json.tmp');
+        await fs.unlink(tempPath);
+      } catch (cleanupError) {
+        // Ignore cleanup errors
+      }
+      return { success: false, error: error.message };
+    }
+  });
+  
+  return await saveAnalysesQueue;
 });
 
 ipcMain.handle('load-analyses', async () => {
   try {
     const filePath = getDataFilePath('saved_analyses.json');
     const data = await fs.readFile(filePath, 'utf8');
-    return { success: true, data: JSON.parse(data) };
+    
+    // Try to parse JSON, with error recovery
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch (parseError) {
+      console.error('JSON parse error, attempting recovery:', parseError.message);
+      console.error('Error position:', parseError.message.match(/position (\d+)/)?.[1] || 'unknown');
+      
+      // Try multiple recovery strategies
+      let cleanedData = data.trim();
+      
+      // Strategy 1: Remove trailing invalid characters after last }
+      const lastBrace = cleanedData.lastIndexOf(']');
+      if (lastBrace !== -1 && cleanedData.trim().startsWith('[')) {
+        // It's an array, find the last ]
+        cleanedData = cleanedData.substring(0, lastBrace + 1);
+        try {
+          parsed = JSON.parse(cleanedData);
+          console.log('Recovered JSON by removing trailing characters after array');
+          // Save the recovered data
+          const tempPath = filePath + '.tmp';
+          await fs.writeFile(tempPath, JSON.stringify(parsed, null, 2), 'utf8');
+          await fs.rename(tempPath, filePath);
+          return { success: true, data: parsed };
+        } catch (recoveryError) {
+          // Continue to next strategy
+        }
+      }
+      
+      // Strategy 2: Try to find and extract valid JSON array
+      const arrayMatch = cleanedData.match(/\[[\s\S]*?\]/);
+      if (arrayMatch) {
+        try {
+          parsed = JSON.parse(arrayMatch[0]);
+          console.log('Recovered JSON by extracting array from corrupted file');
+          // Save the recovered data
+          const tempPath = filePath + '.tmp';
+          await fs.writeFile(tempPath, JSON.stringify(parsed, null, 2), 'utf8');
+          await fs.rename(tempPath, filePath);
+          return { success: true, data: parsed };
+        } catch (recoveryError) {
+          // Continue to backup strategy
+        }
+      }
+      
+      // Strategy 3: Backup corrupted file and return empty array
+      console.error('Recovery failed, backing up corrupted file and returning empty array');
+      const backupPath = filePath + '.corrupted.' + Date.now();
+      try {
+        await fs.copyFile(filePath, backupPath);
+        console.log('Corrupted file backed up to:', backupPath);
+      } catch (backupError) {
+        console.error('Failed to backup corrupted file:', backupError.message);
+      }
+      return { success: true, data: [] };
+    }
+    
+    return { success: true, data: parsed };
   } catch (error) {
     if (error.code === 'ENOENT') {
       // File doesn't exist yet, return empty array

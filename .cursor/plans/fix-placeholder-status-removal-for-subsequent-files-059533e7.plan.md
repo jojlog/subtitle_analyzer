@@ -1,164 +1,39 @@
-<!-- 059533e7-97a2-4d72-a624-00612b62dcee c95edf56-eee3-400c-8808-dba26231a595 -->
-# Fix Placeholder Status Removal for Subsequent Files
+<!-- 059533e7-97a2-4d72-a624-00612b62dcee 47110dc0-6a2f-49f7-b583-58e5cb5eff47 -->
+# Prevent Auto-Display for All Files in Multi-File Queue
 
 ## Problem
 
-When analyzing multiple files sequentially, the first file completes correctly and can be opened. However, the second file (and all subsequent files) shows "analyzing (100%)" status and cannot be opened. This is because the placeholder's `status: 'processing'` field is not being properly removed when the analysis completes.
-
-## Root Cause
-
-In the `analyzeProject` function (used by `processQueue` for subsequent files):
-
-1. **Autosave creates completedAnalysis without explicit status removal** (lines 1890-1897): The `completedAnalysis` object doesn't include `status` or `progress` fields, but the replacement at line 1907 may not fully remove these fields if they were previously set.
-
-2. **Placeholder may not be found** (lines 1908-1929): If `placeholderIndex === -1`, a new entry is created but the original placeholder with `status: 'processing'` remains in the saved array, causing the issue.
-
-3. **Missing explicit cleanup**: Unlike the `analyzeBtn` handler (lines 2330-2367) which explicitly updates the placeholder after autosave, `analyzeProject` doesn't have this second cleanup pass.
+When processing multiple files via queue, the current implementation displays results after each file completes, interrupting the queue processing. The user wants all files (first and subsequent) to be saved but NOT auto-opened during queue processing.
 
 ## Solution
 
 ### File: `renderer.js`
 
-#### Fix 1: Explicitly remove status/progress when replacing placeholder
+#### Fix: Conditional Display Based on Queue Processing
 
-**Location:** Around line 1907 in `analyzeProject` function
+**Location:** Around lines 1994-2000 in `analyzeProject` function, after autosave completes
 
-When replacing the placeholder with completed analysis, explicitly create an object that excludes `status`, `progress`, and `paused` fields:
+1. **Detect queue processing**: Check if there are any ready files in the queue OR if we're in the middle of queue processing
 
-```1899:1907:renderer.js
-if (placeholderId) {
-    const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
-    if (placeholderIndex !== -1) {
-        // Replace placeholder with completed analysis (explicitly remove status and progress fields)
-        saved[placeholderIndex] = {
-            id: placeholderId,
-            fileName: finalFileName,
-            date: new Date().toISOString(),
-            analysis: analysisData,
-            chatHistory: currentChatHistory,
-            subtitleData: currentSubtitleData
-            // Explicitly omit status, progress, paused fields
-        };
-```
+- If `fileProjects.some(p => p.status === 'ready')` → Queue processing in progress
+- If queue processing: Skip all display/switch logic
+- If no ready files: Could be last file or single file - need to distinguish
 
-#### Fix 2: Remove orphaned processing placeholders when placeholder not found
+2. **Better approach**: Since `analyzeProject` is called by `processQueue`, check if there are ready files at the START of analysis, not at the end
 
-**Location:** Around line 1908-1929 in `analyzeProject` function
+- Store flag at start: `const isQueueProcessing = fileProjects.some(p => p.status === 'ready');`
+- At the end, if `isQueueProcessing`, skip display
 
-If placeholder is not found by ID, search for any processing placeholders with the same fileName and remove them before creating the new entry:
+3. **Implementation**:
 
-```1908:1929:renderer.js
-} else {
-    // Placeholder not found by ID - remove any processing placeholders for this file
-    // This handles cases where placeholder ID doesn't match (race conditions, etc.)
-    const processingIndex = saved.findIndex(item =>
-        item.fileName === finalFileName && item.status === 'processing'
-    );
-    if (processingIndex !== -1) {
-        // Remove the orphaned processing placeholder
-        saved.splice(processingIndex, 1);
-        debugLog('🧹 REMOVED ORPHANED PROCESSING PLACEHOLDER', {
-            fileName: finalFileName,
-            removedItemId: saved[processingIndex]?.id
-        });
-    }
-    
-    // Check for duplicate to overwrite
-    const overwriteIndex = saved.findIndex(item =>
-        item.fileName === finalFileName &&
-        item.status !== 'processing'
-    );
-    if (overwriteIndex !== -1) {
-        // Overwrite duplicate
-        saved[overwriteIndex] = completedAnalysis;
-    } else {
-        // Create new entry
-        saved.push(completedAnalysis);
-    }
-}
-```
+- At start of `analyzeProject` (after finding targetProject), check for ready files
+- Store: `const isInQueue = fileProjects.some(p => p.status === 'ready' && p.id !== targetProject.id);`
+- After autosave completes, check this flag
+- If `isInQueue === true`: Skip all display/switch logic (just save and continue)
+- If `isInQueue === false`: Execute display/switch logic (single file or last file)
 
-#### Fix 3: Add final placeholder cleanup pass (same as analyzeBtn handler)
+**Code changes:**
 
-**Location:** After line 1988 in `analyzeProject` function, before line 1994
-
-Add a cleanup pass similar to lines 2330-2367 in the `analyzeBtn` handler to ensure placeholder is updated even if autosave path had issues:
-
-```1988:1992:renderer.js
-            // Always refresh saved files view when analysis completes
-            // This ensures the view updates even if user navigates to it later
-            if (savedAnalysesView) {
-                await loadSavedAnalyses();
-            }
-        } catch (error) {
-            console.error('Error autosaving analysis:', error);
-            // Don't show alert for autosave errors - it's automatic background saving
-        }
-        
-        // Final cleanup: Ensure placeholder is properly updated (backup cleanup)
-        if (placeholderId) {
-            try {
-                let saved = [];
-                if (window.electronAPI) {
-                    const result = await window.electronAPI.loadAnalyses();
-                    if (result.success) {
-                        saved = result.data || [];
-                    }
-                }
-                
-                // Find placeholder by ID or by fileName+status
-                let placeholderIndex = saved.findIndex(item => item.id === placeholderId);
-                if (placeholderIndex === -1) {
-                    // Fallback: find by fileName and processing status
-                    placeholderIndex = saved.findIndex(item =>
-                        item.fileName === finalFileName && item.status === 'processing'
-                    );
-                }
-                
-                if (placeholderIndex !== -1) {
-                    // Ensure placeholder is updated with completed analysis (remove status fields)
-                    const currentItem = saved[placeholderIndex];
-                    if (currentItem.status === 'processing' || !currentItem.analysis) {
-                        // Update placeholder to completed analysis
-                        saved[placeholderIndex] = {
-                            id: placeholderId,
-                            fileName: finalFileName,
-                            date: new Date().toISOString(),
-                            analysis: analysisData,
-                            chatHistory: currentChatHistory,
-                            subtitleData: currentSubtitleData
-                            // Explicitly omit status, progress, paused fields
-                        };
-                        
-                        // Save updated analysis
-                        if (window.electronAPI) {
-                            await window.electronAPI.saveAnalyses(saved);
-                        }
-                        
-                        // Refresh saved files view
-                        if (savedAnalysesView) {
-                            await loadSavedAnalyses();
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('Error in final placeholder cleanup:', error);
-            }
-        }
-```
-
-## Implementation Notes
-
-- All three fixes work together to ensure placeholders are properly cleaned up
-- Fix 1 ensures the replacement object doesn't inherit status fields
-- Fix 2 handles cases where placeholder ID doesn't match
-- Fix 3 is a safety net that ensures cleanup happens even if autosave path had issues
-- The cleanup logic explicitly creates objects without status/progress/paused fields, ensuring they're not accidentally inherited
-
-### To-dos
-
-- [ ] Fix autosave placeholder replacement to search by fileName+status when ID not found
-- [ ] Update duplicate check logic to handle processing placeholders correctly
-- [ ] Add defensive checks in second placeholder update path
-- [ ] Improve cleanup logic with better logging and progress-based checks
-- [ ] Verify placeholderId is preserved correctly throughout analysis flow
+- Add queue detection at start of `analyzeProject` (around line 1596)
+- After final cleanup (around line 1993), check the flag
+- Conditionally execute lines 1994-2033 (display and view switching) based on queue state

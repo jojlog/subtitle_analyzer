@@ -1,126 +1,110 @@
-<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 ab3bd17e-b361-42c9-8c2b-371761fdbe73 -->
-# Fix filestatusworkflow.md Specification Gaps
+<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 44504d33-24cd-49b2-8fbe-7bb9b4f4af0e -->
+# Fix All filestatusworkflow.md Specification Issues
 
-## Issues to Fix
+## Issues Found
 
-### Issue 1: Inactive Save Display Format
+### Issue 1: Duplicate Check on Start Click Uses prompt() Instead of Modal ⚠️ CRITICAL
 
-**Location**: `renderer.js` lines 3979-3990 (`renderInactiveSaves`)
+**Location**: `renderer.js` lines 1858-1864
 
 **Problem**:
 
-- Spec requires: `[File Name / Date Created(Status) / Date Edited(-)]`
-- Current shows: `[File Name / Status(Progress%) / Date Edited(-)]`
-- Status should appear in the "Date Created" column position, not as a separate middle column
+- Spec requires: "중복 이름 검사: 동일 파일 존재 시 이름 변경 모달 표시" (Duplicate check: show rename MODAL if duplicate exists)
+- Current: Uses `prompt()` which is a basic browser prompt, not a styled modal
+- `prompt()` doesn't match the app's design and is not user-friendly
 
-**Solution**:
+**Solution**: Create a proper modal component:
 
-- Modify `renderInactiveSaves` function to match spec format
-- Change structure to show status in Date Created position
-- Update HTML template to match: `[File Name / Status(Progress%) / Date Edited(-)]` but semantically place status where Date Created would be
-
-**Files**: `renderer.js`
+- Create HTML modal structure in `index.html`
+- Style it to match app theme
+- Show modal with input field for new filename
+- Include Cancel and Confirm buttons
+- Replace `prompt()` call with modal display
 
 ---
 
-### Issue 2: Rename Duplicate Check Missing
+### Issue 2: Rename Duplicate Check Uses alert() Instead of Modal ⚠️ CRITICAL
 
-**Location**: `renderer.js` lines 4079-4120 (`saveRename` function)
+**Location**: `renderer.js` line 4144
 
 **Problem**:
 
-- Spec requires duplicate filename check on rename with warning: "A file with this name already exists."
-- Current implementation only validates filename format, no duplicate check
+- Spec requires: "동일 파일명 존재 시 경고 모달 표시: '같은 이름의 파일이 이미 존재합니다.'" (Show warning MODAL if duplicate filename exists)
+- Current: Uses `alert()` which is a basic browser alert, not a styled modal
+- `alert()` doesn't match the app's design
 
 **Solution**:
 
-- Add duplicate check before saving rename
-- Check if new name already exists in saved analyses (excluding current item)
-- Show alert: "A file with this name already exists."
-- Prevent rename if duplicate found
-
-**Files**: `renderer.js`
+- Use the same modal component or create a warning modal
+- Show modal with warning message: "A file with this name already exists."
+- Include OK/Cancel buttons
 
 ---
 
-### Issue 3: Delete Confirmation Message
+### Issue 3: Duplicate Check May Not Be Working Properly ⚠️ NEEDS VERIFICATION
 
-**Location**: `renderer.js` line 3531
+**Location**: `renderer.js` lines 1851-1900
 
 **Problem**:
 
-- Spec requires: "Are you sure you want to permanently delete this file?"
-- Current: "Are you sure you want to delete X saved analysis/analyses?"
-- Missing "permanently" in message
+- User reports duplicate check is not working
+- Need to verify:
+
+1. Is the check actually being executed?
+2. Is the condition correct (checking `item.status !== 'processing'` and `item.analysis`)?
+3. Are there edge cases where duplicates aren't detected?
+4. Is error handling silently continuing (line 1902-1904)?
 
 **Solution**:
 
-- Update confirmation message to match spec
-- For single file: "Are you sure you want to permanently delete this file?"
-- For multiple files: "Are you sure you want to permanently delete these files?"
-
-**Files**: `renderer.js`
+- Verify duplicate check logic
+- Add better error handling and logging
+- Ensure check runs before analysis starts
+- Test with various scenarios
 
 ---
 
-### Issue 4: Double-Click Rename
+### Issue 4: Double-Click Rename - Already Fixed ✅
 
-**Location**: `renderer.js` lines 4085-4134 (`renderActiveSaves` function)
-
-**Problem**:
-
-- Spec requires: "Double-click to rename (syncs actual file)"
-- Current: Uses single-click "rename" button
-- Missing double-click event listener on filename span
-
-**Solution**:
-
-- Add double-click event listener to `.saved-item-name` span in active saves
-- On double-click, trigger rename mode (same as rename button click)
-- Ensure it works alongside existing rename button functionality
-
-**Files**: `renderer.js`
+- Fixed in previous implementation
 
 ---
 
-### Issue 5: Exit Message Text
+## Implementation Plan
 
-**Location**: `main.js` lines 103-104
+### Step 1: Create Reusable Modal Component
 
-**Problem**:
+- Add HTML modal structure to `index.html`
+- Create CSS styling for modal (matching app theme)
+- Create JavaScript functions: `showRenameModal()`, `showWarningModal()`, `closeModal()`
 
-- Spec requires: "All ongoing files will be deleted. Continue?"
-- Current: "All ongoing files will be deleted." + detail text
-- Message should be more concise and match spec
+### Step 2: Replace prompt() with Modal
 
-**Solution**:
+- Replace `prompt()` call in `analyzeProject()` (line 1860)
+- Use modal with input field for new filename
+- Handle Cancel and Confirm actions
 
-- Update `message` to: "All ongoing files will be deleted."
-- Update `detail` to: "You have X file(s) that are currently analyzing, paused, or queued. Continue?"
-- Or combine into single message matching spec exactly
+### Step 3: Replace alert() with Modal
 
-**Files**: `main.js`
+- Replace `alert()` call in `saveRename()` (line 4144)
+- Use warning modal with OK button
 
-## Implementation Order
+### Step 4: Verify Duplicate Check Logic
 
-1. Issue 1: Inactive Save Display Format (UI change) - COMPLETED
-2. Issue 2: Rename Duplicate Check (logic addition) - COMPLETED
-3. Issue 3: Delete Confirmation Message (text update) - COMPLETED
-4. Issue 4: Double-Click Rename (UX enhancement) - COMPLETED
-5. Issue 5: Exit Message Text (text update) - COMPLETED
+- Review duplicate check conditions
+- Add debug logging
+- Ensure check works correctly
+- Fix any logical issues
 
-## Testing Considerations
+### Step 5: Test All Scenarios
 
-- Verify inactive saves display correctly with status in Date Created position
-- Test rename duplicate check prevents overwriting existing files
-- Verify delete confirmation shows "permanently"
-- Test double-click rename on active save filenames
-- Verify exit dialog message matches spec
+- Test duplicate check on Start click
+- Test rename duplicate check
+- Test with various filename scenarios
+- Verify modals work correctly
 
-### To-dos
+## Files to Modify
 
-- [ ] Fix inactive save display format to show status in Date Created column position as per spec
-- [ ] Add duplicate filename check in rename function with proper warning message
-- [ ] Update delete confirmation message to include 'permanently' as per spec
-- [ ] Add double-click event listener to filename span for rename functionality
-- [ ] Update exit confirmation dialog message to match spec exactly
+- `index.html`: Add modal HTML structure
+- `styles.css`: Add modal styling
+- `renderer.js`: Replace prompt/alert with modal calls, verify duplicate check logic

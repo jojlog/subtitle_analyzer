@@ -694,6 +694,16 @@ document.addEventListener('DOMContentLoaded', () => {
     chatHistoryContent = document.getElementById('chatHistoryContent');
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
     themeSelect = document.getElementById('themeSelect');
+    
+    // Modal elements
+    const renameModal = document.getElementById('renameModal');
+    const renameModalMessage = document.getElementById('renameModalMessage');
+    const renameModalInput = document.getElementById('renameModalInput');
+    const renameModalCancel = document.getElementById('renameModalCancel');
+    const renameModalConfirm = document.getElementById('renameModalConfirm');
+    const warningModal = document.getElementById('warningModal');
+    const warningModalMessage = document.getElementById('warningModalMessage');
+    const warningModalOK = document.getElementById('warningModalOK');
 
     // Debug console elements
     const debugBtn = document.getElementById('debugBtn');
@@ -723,6 +733,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize theme
     initializeTheme().catch(err => {
         console.error('Error initializing theme:', err);
+    });
+
+    // Cleanup inactive saves on startup (per spec: inactive saves are temporary, cleared on restart)
+    cleanupInactiveSavesOnStartup().catch(err => {
+        console.error('Error during startup cleanup:', err);
     });
 
     // Home button functionality
@@ -1835,11 +1850,24 @@ async function analyzeProject(projectId) {
     
     // Check for duplicate filename in saved analyses before starting
     try {
+        debugLog('🔍 CHECKING FOR DUPLICATE FILENAME', {
+            fileName: targetProject.fileName,
+            projectId: targetProject.id
+        }, 'info');
+        
         let saved = [];
         if (window.electronAPI) {
             const result = await window.electronAPI.loadAnalyses();
             if (result.success) {
                 saved = result.data || [];
+                debugLog('📋 LOADED SAVED ANALYSES', {
+                    count: saved.length,
+                    completedCount: saved.filter(s => s.analysis && s.status !== 'processing').length
+                }, 'info');
+            } else {
+                debugLog('⚠️ FAILED TO LOAD ANALYSES', {
+                    error: result.error
+                }, 'warn');
             }
         }
         
@@ -1851,22 +1879,34 @@ async function analyzeProject(projectId) {
         );
         
         if (duplicateAnalysis) {
+            debugLog('⚠️ DUPLICATE FILENAME DETECTED', {
+                fileName: targetProject.fileName,
+                duplicateId: duplicateAnalysis.id,
+                duplicateDateCreated: duplicateAnalysis.dateCreated
+            }, 'warn');
+            
             // Show rename modal
-            const newName = prompt(
+            const newName = await showRenameModal(
                 `A file with the name "${targetProject.fileName}" already exists in your saved analyses.\n\n` +
                 `Please enter a new name for this file, or click Cancel to abort:`,
                 targetProject.fileName
             );
             
-            if (newName === null) {
-                // User cancelled
+            if (newName === null || newName === '') {
+                // User cancelled or entered empty name
+                if (newName === '') {
+                    await showWarningModal('Filename cannot be empty.');
+                }
                 debugLog('❌ ANALYSIS CANCELLED', { reason: 'User cancelled duplicate filename rename' }, 'warn');
                 return;
             }
             
             const trimmedName = newName.trim();
-            if (!trimmedName) {
-                alert('Filename cannot be empty.');
+            
+            // Validate filename
+            const validationResult = validateFileName(trimmedName);
+            if (!validationResult.valid) {
+                await showWarningModal(validationResult.error);
                 return;
             }
             
@@ -1878,7 +1918,7 @@ async function analyzeProject(projectId) {
             );
             
             if (newNameDuplicate) {
-                alert(`A file with the name "${trimmedName}" already exists. Please choose a different name.`);
+                await showWarningModal(`A file with the name "${trimmedName}" already exists. Please choose a different name.`);
                 return;
             }
             
@@ -1892,10 +1932,19 @@ async function analyzeProject(projectId) {
             
             // Re-render file list to show updated name
             renderFileProjectsList();
+        } else {
+            debugLog('✅ NO DUPLICATE FILENAME FOUND', {
+                fileName: targetProject.fileName
+            }, 'info');
         }
     } catch (error) {
+        debugLog('❌ ERROR CHECKING DUPLICATE FILENAME', {
+            error: error.message,
+            stack: error.stack,
+            fileName: targetProject.fileName
+        }, 'error');
         console.error('Error checking for duplicate filename:', error);
-        // Continue with analysis even if check fails
+        // Continue with analysis even if check fails (user can rename later if needed)
     }
     
     // Set current project
@@ -4063,9 +4112,35 @@ function renderActiveSaves(activeItems) {
         const saveBtn = savedItem.querySelector('.saved-item-save-btn');
         
         // Per spec: Double-click to rename
-        let doubleClickTimer = null;
+        // Use click delay pattern to prevent conflict with single-click handler
+        let clickTimer = null;
+        
+        nameSpan.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent savedItem click handler from firing
+            
+            // Clear existing timer if any
+            if (clickTimer) {
+                clearTimeout(clickTimer);
+            }
+            
+            // Set timer for single-click action
+            clickTimer = setTimeout(() => {
+                clickTimer = null;
+                // Single click - open analysis
+                if (!isEditMode) {
+                    reopenAnalysis(item);
+                }
+            }, 300); // 300ms delay to detect double-click
+        });
+        
+        // Handle double-click event explicitly
         nameSpan.addEventListener('dblclick', (e) => {
             e.stopPropagation();
+            // Cancel single-click timer
+            if (clickTimer) {
+                clearTimeout(clickTimer);
+                clickTimer = null;
+            }
             // Trigger rename mode (same as rename button click)
             if (renameBtn && !isEditMode) {
                 renameBtn.click();
@@ -4110,7 +4185,7 @@ function renderActiveSaves(activeItems) {
             );
             
             if (duplicateItem) {
-                alert('A file with this name already exists.');
+                await showWarningModal('A file with this name already exists.');
                 renameInput.value = item.fileName;
                 return;
             }
@@ -4202,9 +4277,11 @@ function renderActiveSaves(activeItems) {
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
+                // Exclude clicks on rename elements and name span (handled separately)
                 if (e.target.classList.contains('saved-item-rename-btn') || 
                     e.target.classList.contains('saved-item-rename-input') ||
-                    e.target.classList.contains('saved-item-save-btn')) {
+                    e.target.classList.contains('saved-item-save-btn') ||
+                    e.target.classList.contains('saved-item-name')) {
                     return;
                 }
                 await reopenAnalysis(item);
@@ -4523,7 +4600,97 @@ async function reopenAnalysis(savedItem) {
             chatHistoryModal.style.display = 'none';
         }
     });
+    
+    // Modal event listeners
+    renameModalCancel.addEventListener('click', () => {
+        renameModal.style.display = 'none';
+    });
+    
+    renameModal.addEventListener('click', (e) => {
+        if (e.target === renameModal) {
+            renameModal.style.display = 'none';
+        }
+    });
+    
+    warningModalOK.addEventListener('click', () => {
+        warningModal.style.display = 'none';
+    });
+    
+    warningModal.addEventListener('click', (e) => {
+        if (e.target === warningModal) {
+            warningModal.style.display = 'none';
+        }
+    });
+    
+    // Handle Enter key in rename modal input
+    renameModalInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            renameModalConfirm.click();
+        } else if (e.key === 'Escape') {
+            renameModalCancel.click();
+        }
+    });
 }); // End of DOMContentLoaded
+
+// Modal functions
+function showRenameModal(message, defaultValue = '') {
+    return new Promise((resolve) => {
+        const renameModal = document.getElementById('renameModal');
+        const renameModalMessage = document.getElementById('renameModalMessage');
+        const renameModalInput = document.getElementById('renameModalInput');
+        const renameModalConfirm = document.getElementById('renameModalConfirm');
+        const renameModalCancel = document.getElementById('renameModalCancel');
+        
+        renameModalMessage.textContent = message;
+        renameModalInput.value = defaultValue;
+        renameModal.style.display = 'flex';
+        renameModalInput.focus();
+        renameModalInput.select();
+        
+        const handleConfirm = () => {
+            const value = renameModalInput.value.trim();
+            cleanup();
+            resolve(value);
+        };
+        
+        const handleCancel = () => {
+            cleanup();
+            resolve(null);
+        };
+        
+        const cleanup = () => {
+            renameModalConfirm.removeEventListener('click', handleConfirm);
+            renameModalCancel.removeEventListener('click', handleCancel);
+            renameModal.style.display = 'none';
+        };
+        
+        renameModalConfirm.addEventListener('click', handleConfirm);
+        renameModalCancel.addEventListener('click', handleCancel);
+    });
+}
+
+function showWarningModal(message) {
+    return new Promise((resolve) => {
+        const warningModal = document.getElementById('warningModal');
+        const warningModalMessage = document.getElementById('warningModalMessage');
+        const warningModalOK = document.getElementById('warningModalOK');
+        
+        warningModalMessage.textContent = message;
+        warningModal.style.display = 'flex';
+        
+        const handleOK = () => {
+            cleanup();
+            resolve();
+        };
+        
+        const cleanup = () => {
+            warningModalOK.removeEventListener('click', handleOK);
+            warningModal.style.display = 'none';
+        };
+        
+        warningModalOK.addEventListener('click', handleOK);
+    });
+}
 
 // Helper function to find timestamp for Swedish text
 function findTimestampForText(swedishText) {
@@ -5777,6 +5944,42 @@ async function cleanupUnfinishedFiles() {
     } catch (error) {
         console.error('Error during cleanup:', error);
         debugLog('❌ CLEANUP ERROR', { error: error.message }, 'error');
+    }
+}
+
+// Cleanup inactive saves on startup (per spec: inactive saves are temporary, cleared on restart)
+async function cleanupInactiveSavesOnStartup() {
+    try {
+        debugLog('🚀 STARTUP CLEANUP INITIATED', {}, 'info');
+        
+        let saved = [];
+        if (window.electronAPI) {
+            const result = await window.electronAPI.loadAnalyses();
+            if (result.success) {
+                saved = result.data || [];
+            }
+        }
+        
+        // Remove all processing items (inactive saves should not persist across restarts)
+        // Safe: only removes items with status === 'processing' (inactive saves)
+        // Active saves don't have status field, so they're preserved
+        const cleanedSaved = saved.filter(item => item.status !== 'processing');
+        
+        if (cleanedSaved.length !== saved.length) {
+            if (window.electronAPI) {
+                await window.electronAPI.saveAnalyses(cleanedSaved);
+                debugLog('🧹 STARTUP CLEANUP COMPLETED', {
+                    removedCount: saved.length - cleanedSaved.length,
+                    remainingCount: cleanedSaved.length,
+                    reason: 'Inactive saves are temporary and cleared on restart (per spec)'
+                }, 'success');
+            }
+        } else {
+            debugLog('✅ NO INACTIVE SAVES TO CLEANUP', {}, 'info');
+        }
+    } catch (error) {
+        debugLog('❌ STARTUP CLEANUP ERROR', { error: error.message }, 'error');
+        console.error('Error during startup cleanup:', error);
     }
 }
 

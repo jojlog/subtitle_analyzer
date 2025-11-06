@@ -4870,8 +4870,10 @@ function setupStudyModalResizers() {
             const chatContainer = studyChatMessages.parentElement;
             const containerHeight = chatContainer.getBoundingClientRect().height;
             
-            // Calculate new messages height (grows/shrinks with drag)
-            const newMessagesHeight = startHeights.messages + deltaY;
+            // Calculate new messages height
+            // When dragging UP (deltaY negative), messages should GROW (so subtract negative = add)
+            // When dragging DOWN (deltaY positive), messages should SHRINK (so subtract positive = subtract)
+            const newMessagesHeight = startHeights.messages - deltaY;
             
             // Maximum messages height is container height minus input bar height
             const maxMessagesHeight = containerHeight - inputHeight;
@@ -4881,9 +4883,13 @@ function setupStudyModalResizers() {
             // Constrain the messages height
             const constrainedMessagesHeight = Math.max(minMessagesHeight, Math.min(newMessagesHeight, maxMessagesHeight));
             
-            // Adjust expressions section height opposite to messages (when messages grow, expressions shrink)
-            const messagesDelta = constrainedMessagesHeight - startHeights.messages;
-            const newExpressionsHeight = Math.max(100, startHeights.expressions - messagesDelta);
+            // Calculate how much messages actually changed (after constraints)
+            const actualMessagesDelta = constrainedMessagesHeight - startHeights.messages;
+            
+            // Adjust expressions section height opposite to messages change
+            // When messages grow (positive delta), expressions shrink (subtract delta)
+            // When messages shrink (negative delta), expressions grow (subtract negative = add)
+            const newExpressionsHeight = Math.max(100, startHeights.expressions - actualMessagesDelta);
             
             studyExpressionsSection.style.height = `${newExpressionsHeight}px`;
             studyChatMessages.style.height = `${constrainedMessagesHeight}px`;

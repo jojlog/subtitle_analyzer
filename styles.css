@@ -570,7 +570,7 @@ body.theme-purple {
 }
 
 .result-subsection h3 {
-    font-size: 18px;
+    font-size: 22px;
     margin-bottom: 16px;
     color: var(--accent-color);
 }
@@ -1240,7 +1240,7 @@ body.theme-purple {
 }
 
 .message-bubble {
-    padding: 12px 16px;
+    padding: 8px 12px;
     border-radius: 12px;
     word-wrap: break-word;
 }
@@ -1713,7 +1713,7 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-expressions-title {
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 600;
     color: #ff6600;
     margin-bottom: 12px;
@@ -1841,7 +1841,7 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-message-bubble {
-    padding: 12px 16px;
+    padding: 8px 12px;
     border-radius: 12px;
     word-wrap: break-word;
 }
@@ -2057,7 +2057,7 @@ body.theme-purple .add-to-list-btn:hover {
 
 .chat-history-bubble {
     max-width: 85%;
-    padding: 12px 16px;
+    padding: 8px 12px;
     border-radius: 12px;
     word-wrap: break-word;
     line-height: 1.5;

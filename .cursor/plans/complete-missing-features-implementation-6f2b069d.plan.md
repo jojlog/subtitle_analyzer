@@ -1,110 +1,48 @@
 <!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 44504d33-24cd-49b2-8fbe-7bb9b4f4af0e -->
-# Fix All filestatusworkflow.md Specification Issues
+# Fix Duplicate Name Modal Not Appearing
 
-## Issues Found
+## Problem Analysis
 
-### Issue 1: Duplicate Check on Start Click Uses prompt() Instead of Modal ⚠️ CRITICAL
+The duplicate filename modal (`showRenameModal`) is not appearing when clicking Start on a file with a duplicate name. Potential issues:
 
-**Location**: `renderer.js` lines 1858-1864
+1. **Event Listener Conflict**: The DOMContentLoaded event listeners (lines 4600-4607) immediately close the modal, conflicting with the promise-based handlers in `showRenameModal`
+2. **Duplicate Check May Not Trigger**: The duplicate check conditions might be too strict or not finding duplicates
+3. **Modal Visibility Issues**: CSS z-index or display issues might hide the modal
 
-**Problem**:
+## Implementation Steps
 
-- Spec requires: "중복 이름 검사: 동일 파일 존재 시 이름 변경 모달 표시" (Duplicate check: show rename MODAL if duplicate exists)
-- Current: Uses `prompt()` which is a basic browser prompt, not a styled modal
-- `prompt()` doesn't match the app's design and is not user-friendly
+### Step 1: Fix Event Listener Conflict
 
-**Solution**: Create a proper modal component:
+- Remove the conflicting event listeners in DOMContentLoaded that close the modal immediately
+- Ensure only the promise-based handlers in `showRenameModal` control the modal behavior
+- The modal should only close when the promise resolves (Confirm/Cancel buttons clicked)
 
-- Create HTML modal structure in `index.html`
-- Style it to match app theme
-- Show modal with input field for new filename
-- Include Cancel and Confirm buttons
-- Replace `prompt()` call with modal display
+### Step 2: Add Debug Logging
 
----
+- Add console logging to verify the duplicate check is running
+- Log when duplicate is found and modal should be shown
+- Verify modal elements exist before showing
 
-### Issue 2: Rename Duplicate Check Uses alert() Instead of Modal ⚠️ CRITICAL
+### Step 3: Verify Modal Function
 
-**Location**: `renderer.js` line 4144
+- Ensure `showRenameModal` properly handles the modal display
+- Add error handling if modal elements don't exist
+- Verify z-index is high enough (should be 10000)
 
-**Problem**:
+### Step 4: Test Duplicate Check Logic
 
-- Spec requires: "동일 파일명 존재 시 경고 모달 표시: '같은 이름의 파일이 이미 존재합니다.'" (Show warning MODAL if duplicate filename exists)
-- Current: Uses `alert()` which is a basic browser alert, not a styled modal
-- `alert()` doesn't match the app's design
+- Verify the duplicate check conditions are correct:
+- `item.fileName === targetProject.fileName`
+- `item.status !== 'processing'`
+- `item.analysis` exists (completed file)
+- Test with actual duplicate files to ensure check triggers
 
-**Solution**:
+### Step 5: Add Error Handling
 
-- Use the same modal component or create a warning modal
-- Show modal with warning message: "A file with this name already exists."
-- Include OK/Cancel buttons
-
----
-
-### Issue 3: Duplicate Check May Not Be Working Properly ⚠️ NEEDS VERIFICATION
-
-**Location**: `renderer.js` lines 1851-1900
-
-**Problem**:
-
-- User reports duplicate check is not working
-- Need to verify:
-
-1. Is the check actually being executed?
-2. Is the condition correct (checking `item.status !== 'processing'` and `item.analysis`)?
-3. Are there edge cases where duplicates aren't detected?
-4. Is error handling silently continuing (line 1902-1904)?
-
-**Solution**:
-
-- Verify duplicate check logic
-- Add better error handling and logging
-- Ensure check runs before analysis starts
-- Test with various scenarios
-
----
-
-### Issue 4: Double-Click Rename - Already Fixed ✅
-
-- Fixed in previous implementation
-
----
-
-## Implementation Plan
-
-### Step 1: Create Reusable Modal Component
-
-- Add HTML modal structure to `index.html`
-- Create CSS styling for modal (matching app theme)
-- Create JavaScript functions: `showRenameModal()`, `showWarningModal()`, `closeModal()`
-
-### Step 2: Replace prompt() with Modal
-
-- Replace `prompt()` call in `analyzeProject()` (line 1860)
-- Use modal with input field for new filename
-- Handle Cancel and Confirm actions
-
-### Step 3: Replace alert() with Modal
-
-- Replace `alert()` call in `saveRename()` (line 4144)
-- Use warning modal with OK button
-
-### Step 4: Verify Duplicate Check Logic
-
-- Review duplicate check conditions
-- Add debug logging
-- Ensure check works correctly
-- Fix any logical issues
-
-### Step 5: Test All Scenarios
-
-- Test duplicate check on Start click
-- Test rename duplicate check
-- Test with various filename scenarios
-- Verify modals work correctly
+- Wrap modal show in try-catch
+- Log errors if modal fails to show
+- Add fallback behavior if modal doesn't work
 
 ## Files to Modify
 
-- `index.html`: Add modal HTML structure
-- `styles.css`: Add modal styling
-- `renderer.js`: Replace prompt/alert with modal calls, verify duplicate check logic
+- `renderer.js`: Fix event listener conflicts, add debug logging, improve error handling

@@ -76,24 +76,82 @@ function createWindow() {
   mainWindow.on('close', async (event) => {
     debugLog('debug', 'Window close event triggered');
     
+    // IMPORTANT: Prevent default close immediately to allow async check
+    event.preventDefault();
+    
     // Check for unfinished files by calling IPC handler
     try {
+      debugLog('info', 'Checking for unfinished files...');
+      
       // Use the IPC handler we just created
       const checkResult = await new Promise((resolve) => {
         // We need to call the handler directly since we're in main process
         // But handlers are async, so we'll use executeJavaScript to check
         mainWindow.webContents.executeJavaScript(`
           (() => {
-            const unfinished = window.fileProjects ? window.fileProjects.filter(p => 
-              p.status === 'analyzing' || p.status === 'paused' || p.status === 'queued'
-            ) : [];
-            return { count: unfinished.length, fileNames: unfinished.map(p => p.fileName) };
+            try {
+              // Check for unfinished files in fileProjects
+              const fileProjectsArray = window.fileProjects || [];
+              const unfinished = fileProjectsArray.filter(p => 
+                p && (p.status === 'analyzing' || p.status === 'paused' || p.status === 'queued' || 
+                (p.status === 'ready' && window.isAnalyzing === true))
+              );
+              
+              // Also check global analysis state
+              const hasActiveAnalysis = window.isAnalyzing === true || window.isPaused === true;
+              
+              // Check for processing items in saved analyses
+              const hasPlaceholder = window.currentPlaceholderId ? true : false;
+              
+              const totalCount = Math.max(
+                unfinished.length,
+                hasActiveAnalysis ? 1 : 0,
+                hasPlaceholder ? 1 : 0
+              );
+              
+              console.log('🔍 EXIT CHECK:', {
+                fileProjectsCount: fileProjectsArray.length,
+                unfinishedCount: unfinished.length,
+                unfinishedStatuses: unfinished.map(p => ({ name: p.fileName, status: p.status })),
+                isAnalyzing: window.isAnalyzing,
+                isPaused: window.isPaused,
+                hasPlaceholder: hasPlaceholder,
+                totalCount: totalCount
+              });
+              
+              return { 
+                count: totalCount,
+                fileNames: unfinished.map(p => p.fileName),
+                hasActiveAnalysis: hasActiveAnalysis,
+                hasPlaceholder: hasPlaceholder,
+                details: {
+                  unfinished: unfinished.length,
+                  activeAnalysis: hasActiveAnalysis ? 1 : 0,
+                  placeholder: hasPlaceholder ? 1 : 0
+                }
+              };
+            } catch (err) {
+              console.error('Error in exit check:', err);
+              return { count: 0, fileNames: [], hasActiveAnalysis: false, hasPlaceholder: false, error: err.message };
+            }
           })()
-        `).then(resolve).catch(() => resolve({ count: 0, fileNames: [] }));
+        `).then(resolve).catch((err) => {
+          debugLog('error', 'Error executing JavaScript for exit check:', err.message);
+          console.error('Exit check error:', err);
+          resolve({ count: 0, fileNames: [], hasActiveAnalysis: false, hasPlaceholder: false, error: err.message });
+        });
       });
       
+      debugLog('info', 'Exit check result', checkResult);
+      console.log('Exit check result:', checkResult);
+      
       if (checkResult && checkResult.count > 0) {
-        debugLog('warn', 'Unfinished files detected, showing confirmation dialog', { count: checkResult.count });
+        debugLog('warn', 'Unfinished files detected, showing confirmation dialog', { 
+          count: checkResult.count,
+          fileNames: checkResult.fileNames,
+          hasActiveAnalysis: checkResult.hasActiveAnalysis,
+          details: checkResult.details
+        });
         
         // Show confirmation dialog
         const { dialog } = require('electron');
@@ -108,37 +166,49 @@ function createWindow() {
           cancelId: 0
         });
         
+        debugLog('info', 'Dialog response received', { response: response.response });
+        
         if (response.response === 0) {
-          // User cancelled - prevent window close
-          event.preventDefault();
+          // User cancelled - window close already prevented
           debugLog('info', 'Exit cancelled by user');
-          return;
+          return; // Don't close window
         }
         
         // User confirmed - cleanup unfinished files
         debugLog('info', 'User confirmed exit, cleaning up unfinished files');
-        await mainWindow.webContents.executeJavaScript(`
-          (() => {
-            if (window.cleanupUnfinishedFiles) {
-              return window.cleanupUnfinishedFiles();
-            }
-            return Promise.resolve();
-          })()
-        `);
-        // Wait a bit to ensure cleanup completes
-        await new Promise(resolve => setTimeout(resolve, 100));
+        try {
+          await mainWindow.webContents.executeJavaScript(`
+            (() => {
+              if (window.cleanupUnfinishedFiles) {
+                return window.cleanupUnfinishedFiles();
+              }
+              return Promise.resolve();
+            })()
+          `);
+          // Wait a bit to ensure cleanup completes
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (cleanupError) {
+          debugLog('error', 'Error during cleanup:', cleanupError.message);
+        }
+        
+        // Now allow window to close
+        debugLog('info', 'Closing window after cleanup');
+        mainWindow.destroy();
+      } else {
+        debugLog('info', 'No unfinished files detected, allowing exit');
+        // No unfinished files, allow close
+        mainWindow.destroy();
       }
     } catch (error) {
       debugLog('error', 'Error checking unfinished files during exit:', error.message);
-      // Continue with exit even if check fails
+      console.error('Exit handler error:', error);
+      // On error, allow exit (safer than blocking)
+      mainWindow.destroy();
     }
-    
-    // Allow window to close
-    debugLog('debug', 'Window close allowed');
   });
 
   // Open DevTools in development (comment out for production)
-  // mainWindow.webContents.openDevTools(); // Disabled to prevent DevTools from opening automatically
+  mainWindow.webContents.openDevTools(); // Enabled for debugging
 }
 
 app.whenReady().then(() => {

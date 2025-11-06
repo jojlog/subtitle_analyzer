@@ -32,6 +32,25 @@ Object.defineProperty(window, 'fileProjects', {
     configurable: true
 });
 
+// Expose analysis state flags for exit handler
+Object.defineProperty(window, 'isAnalyzing', {
+    get: () => isAnalyzing,
+    enumerable: true,
+    configurable: true
+});
+
+Object.defineProperty(window, 'isPaused', {
+    get: () => isPaused,
+    enumerable: true,
+    configurable: true
+});
+
+Object.defineProperty(window, 'currentPlaceholderId', {
+    get: () => currentPlaceholderId,
+    enumerable: true,
+    configurable: true
+});
+
 // Pagination state
 let currentPage = 1;
 let itemsPerPage = 50;
@@ -1505,20 +1524,20 @@ async function processSubtitleBatches(subtitleData, placeholderId = null) {
                                     return;
                                 }
                                 
-                                proj.progress = progress;
-                               
-                                // Calculate and store estimated time remaining using captured values
-                                const currentBatchTimes = batchTimes.slice(); // Capture current batch times
-                                const totalBatches = batches.length;
-                                const currentCompletedCount = completedCount;
-                                if (currentBatchTimes.length > 0 && totalBatches > currentCompletedCount) {
-                                    const avgTimePerBatch = currentBatchTimes.reduce((sum, time) => sum + time, 0) / currentBatchTimes.length;
-                                    const remainingBatches = totalBatches - currentCompletedCount;
-                                    const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
-                                    proj.estimatedTimeRemaining = formatTimeRemaining(estimatedSecondsRemaining);
+                                    proj.progress = progress;
+                                   
+                                    // Calculate and store estimated time remaining using captured values
+                                    const currentBatchTimes = batchTimes.slice(); // Capture current batch times
+                                    const totalBatches = batches.length;
+                                    const currentCompletedCount = completedCount;
+                                    if (currentBatchTimes.length > 0 && totalBatches > currentCompletedCount) {
+                                        const avgTimePerBatch = currentBatchTimes.reduce((sum, time) => sum + time, 0) / currentBatchTimes.length;
+                                        const remainingBatches = totalBatches - currentCompletedCount;
+                                        const estimatedSecondsRemaining = avgTimePerBatch * remainingBatches / 1000;
+                                        proj.estimatedTimeRemaining = formatTimeRemaining(estimatedSecondsRemaining);
+                                    }
+                                    renderFileProjectsList();
                                 }
-                                renderFileProjectsList();
-                            }
                             
                             // Double-check analysis is still active before saving
                             if (!isAnalyzing || shouldCancelAnalysis || currentPlaceholderId !== placeholderId) {
@@ -1862,28 +1881,50 @@ async function analyzeProject(projectId) {
                 saved = result.data || [];
                 debugLog('📋 LOADED SAVED ANALYSES', {
                     count: saved.length,
-                    completedCount: saved.filter(s => s.analysis && s.status !== 'processing').length
+                    completedCount: saved.filter(s => s.analysis && s.status !== 'processing').length,
+                    savedFileNames: saved.map(s => s.fileName).slice(0, 10) // Log first 10 filenames for debugging
                 }, 'info');
             } else {
                 debugLog('⚠️ FAILED TO LOAD ANALYSES', {
                     error: result.error
                 }, 'warn');
             }
+        } else {
+            debugLog('⚠️ ELECTRON API NOT AVAILABLE', {}, 'warn');
         }
         
         // Check for duplicate filename in completed analyses only (not processing items)
-        const duplicateAnalysis = saved.find(item => 
-            item.fileName === targetProject.fileName && 
-            item.status !== 'processing' &&
-            item.analysis // Must have analysis data (completed)
-        );
+        const duplicateAnalysis = saved.find(item => {
+            const isMatch = item.fileName === targetProject.fileName && 
+                          item.status !== 'processing' &&
+                          item.analysis; // Must have analysis data (completed)
+            
+            if (item.fileName === targetProject.fileName) {
+                debugLog('🔍 CHECKING ITEM', {
+                    fileName: item.fileName,
+                    status: item.status,
+                    hasAnalysis: !!item.analysis,
+                    isMatch: isMatch,
+                    itemId: item.id
+                }, 'info');
+            }
+            
+            return isMatch;
+        });
         
         if (duplicateAnalysis) {
             debugLog('⚠️ DUPLICATE FILENAME DETECTED', {
                 fileName: targetProject.fileName,
                 duplicateId: duplicateAnalysis.id,
-                duplicateDateCreated: duplicateAnalysis.dateCreated
+                duplicateDateCreated: duplicateAnalysis.dateCreated,
+                duplicateStatus: duplicateAnalysis.status,
+                duplicateHasAnalysis: !!duplicateAnalysis.analysis
             }, 'warn');
+            
+            console.log('🎯 ABOUT TO SHOW RENAME MODAL', {
+                fileName: targetProject.fileName,
+                modalExists: !!document.getElementById('renameModal')
+            });
             
             // Show rename modal
             const newName = await showRenameModal(
@@ -1891,6 +1932,11 @@ async function analyzeProject(projectId) {
                 `Please enter a new name for this file, or click Cancel to abort:`,
                 targetProject.fileName
             );
+            
+            debugLog('📝 RENAME MODAL RESULT', {
+                newName: newName,
+                cancelled: newName === null || newName === ''
+            }, 'info');
             
             if (newName === null || newName === '') {
                 // User cancelled or entered empty name
@@ -1934,7 +1980,9 @@ async function analyzeProject(projectId) {
             renderFileProjectsList();
         } else {
             debugLog('✅ NO DUPLICATE FILENAME FOUND', {
-                fileName: targetProject.fileName
+                fileName: targetProject.fileName,
+                totalSaved: saved.length,
+                checkedItems: saved.filter(item => item.fileName === targetProject.fileName).length
             }, 'info');
         }
     } catch (error) {
@@ -1962,7 +2010,7 @@ async function analyzeProject(projectId) {
         targetProject.currentBatchIndex = 0;
         targetProject.processedBatches = [];
         targetProject.pausedAt = null;
-        targetProject.progress = 0;
+    targetProject.progress = 0;
     } else {
         // Resuming from pause - keep currentBatchIndex and processedBatches
         debugLog('▶️ RESUMING FROM PAUSE', {
@@ -2248,8 +2296,8 @@ async function analyzeProject(projectId) {
                 // Still try to save with filename from targetProject if available
                 if (!targetProject || !targetProject.fileName) {
                     debugLog('❌ CANNOT SAVE - NO PROJECT OR FILENAME', {}, 'error');
-                    return;
-                }
+                return;
+            }
             }
             const finalFileName = currentProject ? currentProject.fileName : targetProject.fileName;
             
@@ -2595,15 +2643,15 @@ async function processQueue() {
     isProcessingQueue = true;
     
     try {
-        // Find first ready project and update it (don't create new entries)
-        const readyProject = fileProjects.find(p => p.status === 'ready');
-        if (readyProject) {
-            await analyzeProject(readyProject.id);
-            // After analysis completes, check for next file
+    // Find first ready project and update it (don't create new entries)
+    const readyProject = fileProjects.find(p => p.status === 'ready');
+    if (readyProject) {
+        await analyzeProject(readyProject.id);
+        // After analysis completes, check for next file
             // Clear flag before recursive call so it can start again
             isProcessingQueue = false;
             // Recursive call - will check isProcessingQueue flag
-            processQueue();
+        processQueue();
         } else {
             // No more ready projects - clear flag
             isProcessingQueue = false;
@@ -3843,7 +3891,7 @@ async function loadSavedAnalyses() {
         }
         return item;
     });
-
+    
     // Clean up already completed files: remove status/progress fields from items that have analysis data
     let needsCleanup = false;
     let cleanedCount = 0;
@@ -4006,43 +4054,43 @@ function renderInactiveSaves(inactiveItems) {
         savedItem.className = 'saved-item saved-item-inactive';
         savedItem.setAttribute('data-item-id', String(item.id));
         
-        const progress = item.progress || 0;
-        const paused = item.paused || false;
-        
-        // Check if this item corresponds to a queued file in the Home view
-        let isQueuedInHome = false;
-        if (isAnalyzing) {
-            const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
-            if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
-                isQueuedInHome = true;
+            const progress = item.progress || 0;
+            const paused = item.paused || false;
+            
+            // Check if this item corresponds to a queued file in the Home view
+            let isQueuedInHome = false;
+            if (isAnalyzing) {
+                const correspondingProject = fileProjects.find(p => p.fileName === item.fileName);
+                if (correspondingProject && correspondingProject.status === 'ready' && correspondingProject.id !== currentProjectId) {
+                    isQueuedInHome = true;
+                }
             }
-        }
-        
-        // Determine status text: paused (queued) > paused (analyzing) > queued > analyzing
-        let processingStatusText;
-        if (isQueuedInHome && isPaused) {
-            processingStatusText = 'paused';
-        } else if (isQueuedInHome) {
-            processingStatusText = 'queued';
-        } else if (paused) {
-            processingStatusText = `paused (${progress}%)`;
-        } else {
-            processingStatusText = `analyzing (${progress}%)`;
-        }
-        
+            
+            // Determine status text: paused (queued) > paused (analyzing) > queued > analyzing
+            let processingStatusText;
+            if (isQueuedInHome && isPaused) {
+                processingStatusText = 'paused';
+            } else if (isQueuedInHome) {
+                processingStatusText = 'queued';
+            } else if (paused) {
+                processingStatusText = `paused (${progress}%)`;
+            } else {
+                processingStatusText = `analyzing (${progress}%)`;
+            }
+            
         // Format: File Name / Date Created(Status) / Date Edited(-)
         // Per spec: Date Created shows status instead of date
-        savedItem.innerHTML = `
-            <div class="saved-item-content-wrapper">
-                <div class="saved-item-content">
-                    <div class="saved-item-top-row">
-                        <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+            savedItem.innerHTML = `
+                <div class="saved-item-content-wrapper">
+                    <div class="saved-item-content">
+                        <div class="saved-item-top-row">
+                            <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
                         <span class="saved-item-date-created">${processingStatusText}</span>
                         <span class="saved-item-date-edited">-</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-        `;
+            `;
         
         inactiveSavesList.appendChild(savedItem);
     });
@@ -4089,27 +4137,124 @@ function renderActiveSaves(activeItems) {
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
         // Format: File Name / Date Edited / Date Created
-        savedItem.innerHTML = `
-            <div class="saved-item-content-wrapper">
-                ${checkboxHtml}
-                <div class="saved-item-content">
-                    <div class="saved-item-top-row">
-                        <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+            savedItem.innerHTML = `
+                <div class="saved-item-content-wrapper">
+                    ${checkboxHtml}
+                    <div class="saved-item-content">
+                        <div class="saved-item-top-row">
+                            <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
                         <span class="saved-item-date-edited">${dateEditedStr}</span>
                         <span class="saved-item-date-created">${dateCreatedStr}</span>
-                        <button class="saved-item-rename-btn" data-item-id="${escapeHtml(item.id)}">rename</button>
-                        <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
-                        <button class="saved-item-save-btn" data-item-id="${escapeHtml(item.id)}" style="display: none;">save</button>
+                            <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
+                        </div>
                     </div>
                 </div>
-            </div>
-        `;
-        
+            `;
+            
         // Add rename functionality
-        const renameBtn = savedItem.querySelector('.saved-item-rename-btn');
-        const renameInput = savedItem.querySelector('.saved-item-rename-input');
-        const nameSpan = savedItem.querySelector('.saved-item-name');
-        const saveBtn = savedItem.querySelector('.saved-item-save-btn');
+            const renameInput = savedItem.querySelector('.saved-item-rename-input');
+            const nameSpan = savedItem.querySelector('.saved-item-name');
+        
+        // Function to enter edit mode
+        const enterEditMode = () => {
+            if (isEditMode) return; // Don't allow editing in edit mode
+            nameSpan.style.display = 'none';
+            const topRow = savedItem.querySelector('.saved-item-top-row');
+            topRow.insertBefore(renameInput, nameSpan.nextSibling);
+            renameInput.style.display = 'block';
+            renameInput.focus();
+            renameInput.select();
+        };
+            
+            // Function to save the rename
+            const saveRename = async () => {
+                const newName = renameInput.value.trim();
+                if (!newName) {
+                    renameInput.value = item.fileName;
+                exitEditMode();
+                    return;
+                }
+                
+            // Validate filename: check for invalid characters, length, etc.
+            const validationResult = validateFileName(newName);
+            if (!validationResult.valid) {
+                debugLog('❌ INVALID FILENAME', {
+                    fileName: newName,
+                    error: validationResult.error
+                }, 'error');
+                await showWarningModal(validationResult.error);
+                renameInput.value = item.fileName;
+                exitEditMode();
+                return;
+            }
+            
+            // Check for duplicate filename before renaming
+                        let saved = [];
+                        if (window.electronAPI) {
+                            const result = await window.electronAPI.loadAnalyses();
+                            if (result.success) {
+                                saved = result.data || [];
+                            }
+                        }
+                        
+            // Check if new name already exists (excluding current item)
+            const duplicateItem = saved.find(s => 
+                s.fileName === newName && 
+                s.id !== item.id &&
+                s.status !== 'processing' && // Don't check against processing items
+                s.analysis // Must be completed (have analysis data)
+            );
+            
+            if (duplicateItem) {
+                await showWarningModal('A file with this name already exists.');
+                renameInput.value = item.fileName;
+                exitEditMode();
+                return;
+            }
+            
+            if (newName !== item.fileName) {
+                item.fileName = newName;
+                
+                try {
+                        const index = saved.findIndex(s => s.id === item.id);
+                        if (index !== -1) {
+                            saved[index].fileName = newName;
+                        saved[index].dateEdited = new Date().toISOString();
+                        if (!saved[index].dateCreated) {
+                            saved[index].dateCreated = saved[index].dateEdited || new Date().toISOString();
+                        }
+                            
+                            if (window.electronAPI) {
+                                await window.electronAPI.saveAnalyses(saved);
+                                nameSpan.textContent = newName;
+                            item.fileName = newName;
+                            item.dateEdited = saved[index].dateEdited;
+                            // Reload to update date display
+                            await loadSavedAnalyses();
+                            }
+                        }
+                    } catch (error) {
+                    debugLog('❌ ERROR RENAMING FILE', {
+                        itemId: item.id,
+                        oldName: item.fileName,
+                        newName: newName,
+                        error: error.message,
+                        stack: error.stack
+                    }, 'error');
+                    await showWarningModal('Error renaming file: ' + error.message);
+                        renameInput.value = item.fileName;
+                    exitEditMode();
+                        return;
+                    }
+                }
+                
+            exitEditMode();
+        };
+        
+        const exitEditMode = () => {
+                nameSpan.style.display = '';
+                renameInput.style.display = 'none';
+        };
         
         // Per spec: Double-click to rename
         // Use click delay pattern to prevent conflict with single-click handler
@@ -4135,152 +4280,44 @@ function renderActiveSaves(activeItems) {
         
         // Handle double-click event explicitly
         nameSpan.addEventListener('dblclick', (e) => {
-            e.stopPropagation();
+                        e.stopPropagation();
             // Cancel single-click timer
             if (clickTimer) {
                 clearTimeout(clickTimer);
                 clickTimer = null;
             }
-            // Trigger rename mode (same as rename button click)
-            if (renameBtn && !isEditMode) {
-                renameBtn.click();
+            // Trigger rename mode
+            if (!isEditMode) {
+                enterEditMode();
             }
         });
         
-        // Function to save the rename
-        const saveRename = async () => {
-            const newName = renameInput.value.trim();
-            if (!newName) {
-                renameInput.value = item.fileName;
-                return;
-            }
-            
-            // Validate filename: check for invalid characters, length, etc.
-            const validationResult = validateFileName(newName);
-            if (!validationResult.valid) {
-                debugLog('❌ INVALID FILENAME', {
-                    fileName: newName,
-                    error: validationResult.error
-                }, 'error');
-                alert(validationResult.error);
-                renameInput.value = item.fileName;
-                return;
-            }
-            
-            // Check for duplicate filename before renaming
-            let saved = [];
-            if (window.electronAPI) {
-                const result = await window.electronAPI.loadAnalyses();
-                if (result.success) {
-                    saved = result.data || [];
-                }
-            }
-            
-            // Check if new name already exists (excluding current item)
-            const duplicateItem = saved.find(s => 
-                s.fileName === newName && 
-                s.id !== item.id &&
-                s.status !== 'processing' && // Don't check against processing items
-                s.analysis // Must be completed (have analysis data)
-            );
-            
-            if (duplicateItem) {
-                await showWarningModal('A file with this name already exists.');
-                renameInput.value = item.fileName;
-                return;
-            }
-            
-            if (newName !== item.fileName) {
-                item.fileName = newName;
-                
-                try {
-                    const index = saved.findIndex(s => s.id === item.id);
-                    if (index !== -1) {
-                        saved[index].fileName = newName;
-                        saved[index].dateEdited = new Date().toISOString();
-                        if (!saved[index].dateCreated) {
-                            saved[index].dateCreated = saved[index].dateEdited || new Date().toISOString();
-                        }
-                        
-                        if (window.electronAPI) {
-                            await window.electronAPI.saveAnalyses(saved);
-                            nameSpan.textContent = newName;
-                            item.fileName = newName;
-                            item.dateEdited = saved[index].dateEdited;
-                            // Reload to update date display
-                            await loadSavedAnalyses();
-                        }
-                    }
-                } catch (error) {
-                    debugLog('❌ ERROR RENAMING FILE', {
-                        itemId: item.id,
-                        oldName: item.fileName,
-                        newName: newName,
-                        error: error.message,
-                        stack: error.stack
-                    }, 'error');
-                    alert('Error renaming file: ' + error.message);
+        if (renameInput && nameSpan) {
+            // Enter key to save
+                renameInput.addEventListener('keydown', async (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        await saveRename();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
                     renameInput.value = item.fileName;
-                    return;
-                }
-            }
-            
-            renameBtn.style.display = '';
-            nameSpan.style.display = '';
-            renameInput.style.display = 'none';
-            if (saveBtn) saveBtn.style.display = 'none';
-        };
-        
-        const cancelRename = () => {
-            renameInput.value = item.fileName;
-            renameBtn.style.display = '';
-            nameSpan.style.display = '';
-            renameInput.style.display = 'none';
-            if (saveBtn) saveBtn.style.display = 'none';
-        };
-        
-        if (renameBtn && renameInput && nameSpan) {
-            renameBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                renameBtn.style.display = 'none';
-                nameSpan.style.display = 'none';
-                const topRow = savedItem.querySelector('.saved-item-top-row');
-                topRow.insertBefore(renameInput, renameBtn);
-                renameInput.style.display = 'block';
-                if (saveBtn) saveBtn.style.display = 'block';
-                renameInput.focus();
-                renameInput.select();
-            });
-            
-            if (saveBtn) {
-                saveBtn.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    await saveRename();
-                });
-            }
-            
-            renameInput.addEventListener('keydown', async (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    await saveRename();
-                } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelRename();
+                    exitEditMode();
                 }
             });
             
-            renameBtn.addEventListener('click', (e) => e.stopPropagation());
+            // Blur (click outside) to save
+            renameInput.addEventListener('blur', async () => {
+                await saveRename();
+            });
+            
             renameInput.addEventListener('click', (e) => e.stopPropagation());
-            if (saveBtn) saveBtn.addEventListener('click', (e) => e.stopPropagation());
         }
         
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Exclude clicks on rename elements and name span (handled separately)
-                if (e.target.classList.contains('saved-item-rename-btn') || 
-                    e.target.classList.contains('saved-item-rename-input') ||
-                    e.target.classList.contains('saved-item-save-btn') ||
+                // Exclude clicks on rename input and name span (handled separately)
+                if (e.target.classList.contains('saved-item-rename-input') ||
                     e.target.classList.contains('saved-item-name')) {
                     return;
                 }
@@ -4293,9 +4330,8 @@ function renderActiveSaves(activeItems) {
             }
             savedItem.addEventListener('click', (e) => {
                 if (e.target.type !== 'checkbox' && 
-                    !e.target.classList.contains('saved-item-rename-btn') &&
                     !e.target.classList.contains('saved-item-rename-input') &&
-                    !e.target.classList.contains('saved-item-save-btn')) {
+                    !e.target.classList.contains('saved-item-name')) {
                     const checkbox = savedItem.querySelector('.saved-item-checkbox');
                     if (checkbox) {
                         checkbox.checked = !checkbox.checked;
@@ -4601,94 +4637,168 @@ async function reopenAnalysis(savedItem) {
         }
     });
     
-    // Modal event listeners
-    renameModalCancel.addEventListener('click', () => {
-        renameModal.style.display = 'none';
-    });
-    
-    renameModal.addEventListener('click', (e) => {
-        if (e.target === renameModal) {
-            renameModal.style.display = 'none';
-        }
-    });
-    
-    warningModalOK.addEventListener('click', () => {
-        warningModal.style.display = 'none';
-    });
-    
-    warningModal.addEventListener('click', (e) => {
-        if (e.target === warningModal) {
-            warningModal.style.display = 'none';
-        }
-    });
-    
-    // Handle Enter key in rename modal input
-    renameModalInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            renameModalConfirm.click();
-        } else if (e.key === 'Escape') {
-            renameModalCancel.click();
-        }
-    });
+    // Note: Modal event listeners for renameModal and warningModal are handled 
+    // within the showRenameModal() and showWarningModal() functions themselves
+    // to avoid conflicts with promise-based handlers
 }); // End of DOMContentLoaded
 
 // Modal functions
 function showRenameModal(message, defaultValue = '') {
     return new Promise((resolve) => {
-        const renameModal = document.getElementById('renameModal');
-        const renameModalMessage = document.getElementById('renameModalMessage');
-        const renameModalInput = document.getElementById('renameModalInput');
-        const renameModalConfirm = document.getElementById('renameModalConfirm');
-        const renameModalCancel = document.getElementById('renameModalCancel');
-        
-        renameModalMessage.textContent = message;
-        renameModalInput.value = defaultValue;
-        renameModal.style.display = 'flex';
-        renameModalInput.focus();
-        renameModalInput.select();
-        
-        const handleConfirm = () => {
-            const value = renameModalInput.value.trim();
-            cleanup();
-            resolve(value);
-        };
-        
-        const handleCancel = () => {
-            cleanup();
-            resolve(null);
-        };
-        
-        const cleanup = () => {
-            renameModalConfirm.removeEventListener('click', handleConfirm);
-            renameModalCancel.removeEventListener('click', handleCancel);
-            renameModal.style.display = 'none';
-        };
-        
-        renameModalConfirm.addEventListener('click', handleConfirm);
-        renameModalCancel.addEventListener('click', handleCancel);
+        try {
+            const renameModal = document.getElementById('renameModal');
+            const renameModalMessage = document.getElementById('renameModalMessage');
+            const renameModalInput = document.getElementById('renameModalInput');
+            const renameModalConfirm = document.getElementById('renameModalConfirm');
+            const renameModalCancel = document.getElementById('renameModalCancel');
+            
+            // Verify all elements exist
+            if (!renameModal || !renameModalMessage || !renameModalInput || !renameModalConfirm || !renameModalCancel) {
+                console.error('❌ MODAL ELEMENTS NOT FOUND', {
+                    renameModal: !!renameModal,
+                    renameModalMessage: !!renameModalMessage,
+                    renameModalInput: !!renameModalInput,
+                    renameModalConfirm: !!renameModalConfirm,
+                    renameModalCancel: !!renameModalCancel
+                });
+                // Fallback to prompt if modal elements don't exist
+                const result = prompt(message, defaultValue);
+                resolve(result ? result.trim() : null);
+                return;
+            }
+            
+            debugLog('📋 SHOWING RENAME MODAL', {
+                message: message.substring(0, 50) + '...',
+                defaultValue: defaultValue
+            }, 'info');
+            
+            console.log('🎯 SHOWING MODAL - ELEMENTS CHECK:', {
+                modal: renameModal,
+                modalDisplay: renameModal.style.display,
+                modalComputedStyle: window.getComputedStyle(renameModal).display,
+                modalVisibility: window.getComputedStyle(renameModal).visibility,
+                modalZIndex: window.getComputedStyle(renameModal).zIndex
+            });
+            
+            renameModalMessage.textContent = message;
+            renameModalInput.value = defaultValue;
+            
+            // Force show the modal
+            renameModal.style.display = 'flex';
+            renameModal.style.visibility = 'visible';
+            renameModal.style.opacity = '1';
+            renameModal.style.zIndex = '10000';
+            renameModal.classList.add('show');
+            
+            renameModalInput.focus();
+            renameModalInput.select();
+            
+            const handleConfirm = () => {
+                const value = renameModalInput.value.trim();
+                cleanup();
+                debugLog('✅ RENAME MODAL CONFIRMED', { value }, 'info');
+                resolve(value);
+            };
+            
+            const handleCancel = () => {
+                cleanup();
+                debugLog('❌ RENAME MODAL CANCELLED', {}, 'info');
+                resolve(null);
+            };
+            
+            const handleBackgroundClick = (e) => {
+                if (e.target === renameModal) {
+                    handleCancel();
+                }
+            };
+            
+            const handleKeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleConfirm();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleCancel();
+                }
+            };
+            
+            const cleanup = () => {
+                renameModalConfirm.removeEventListener('click', handleConfirm);
+                renameModalCancel.removeEventListener('click', handleCancel);
+                renameModal.removeEventListener('click', handleBackgroundClick);
+                renameModalInput.removeEventListener('keydown', handleKeydown);
+                renameModal.style.display = 'none';
+                renameModal.classList.remove('show');
+            };
+            
+            renameModalConfirm.addEventListener('click', handleConfirm);
+            renameModalCancel.addEventListener('click', handleCancel);
+            renameModal.addEventListener('click', handleBackgroundClick);
+            renameModalInput.addEventListener('keydown', handleKeydown);
+        } catch (error) {
+            console.error('❌ ERROR SHOWING RENAME MODAL', error);
+            // Fallback to prompt
+            const result = prompt(message, defaultValue);
+            resolve(result ? result.trim() : null);
+        }
     });
 }
 
 function showWarningModal(message) {
     return new Promise((resolve) => {
-        const warningModal = document.getElementById('warningModal');
-        const warningModalMessage = document.getElementById('warningModalMessage');
-        const warningModalOK = document.getElementById('warningModalOK');
-        
-        warningModalMessage.textContent = message;
-        warningModal.style.display = 'flex';
-        
-        const handleOK = () => {
-            cleanup();
+        try {
+            const warningModal = document.getElementById('warningModal');
+            const warningModalMessage = document.getElementById('warningModalMessage');
+            const warningModalOK = document.getElementById('warningModalOK');
+            
+            // Verify all elements exist
+            if (!warningModal || !warningModalMessage || !warningModalOK) {
+                console.error('❌ WARNING MODAL ELEMENTS NOT FOUND', {
+                    warningModal: !!warningModal,
+                    warningModalMessage: !!warningModalMessage,
+                    warningModalOK: !!warningModalOK
+                });
+                // Fallback to alert if modal elements don't exist
+                alert(message);
+                resolve();
+                return;
+            }
+            
+            debugLog('⚠️ SHOWING WARNING MODAL', {
+                message: message.substring(0, 50) + '...'
+            }, 'warn');
+            
+            warningModalMessage.textContent = message;
+            warningModal.style.display = 'flex';
+            warningModal.classList.add('show');
+            
+            const handleOK = () => {
+                cleanup();
+                debugLog('✅ WARNING MODAL CLOSED', {}, 'info');
+                resolve();
+            };
+            
+            const handleBackgroundClick = (e) => {
+                if (e.target === warningModal) {
+                    handleOK();
+                }
+            };
+            
+            const cleanup = () => {
+                warningModalOK.removeEventListener('click', handleOK);
+                warningModal.removeEventListener('click', handleBackgroundClick);
+                warningModal.style.display = 'none';
+                warningModal.classList.remove('show');
+            };
+            
+            warningModalOK.addEventListener('click', handleOK);
+            warningModal.addEventListener('click', handleBackgroundClick);
+        } catch (error) {
+            console.error('❌ ERROR SHOWING WARNING MODAL', error);
+            // Fallback to alert
+            alert(message);
             resolve();
-        };
-        
-        const cleanup = () => {
-            warningModalOK.removeEventListener('click', handleOK);
-            warningModal.style.display = 'none';
-        };
-        
-        warningModalOK.addEventListener('click', handleOK);
+        }
     });
 }
 

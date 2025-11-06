@@ -1,141 +1,140 @@
-<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 229a38c7-9bc9-4025-8f26-69255da0ae33 -->
-# Line-by-Line Study Layout & Interaction Implementation
+<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 8ffb1004-a9c4-4b80-b957-beb84f850650 -->
+# Study Modal Layout Fixes Implementation Plan
 
-## Overview
+## Current State Analysis
 
-Implement a precise layout system for the Line-by-Line Study modal where sections maintain fixed positions, accordion expansion drives expressions section resizing, and dividers behave according to specification.
+### Layout Structure:
 
-## Key Requirements
+- `.study-modal-content`: Flex column container (fixed height: 90%, max-height: 700px)
+- `.study-timestamp-section`: Fixed at top (flex: 0 0 auto)
+- `.study-item-display`: Contains Swedish text + accordion (flex: 0 0 auto)
+- `.study-expressions-section`: Expressions list (flex: 0 0 auto, height: 200px)
+- `.study-resizer`: Divider between expressions and chat (flex-shrink: 0)
+- `.study-chat-container`: Chat area (flex: 1 1 auto)
+- `.study-chat-messages`: Messages area (flex: 1 1 auto)
+- `.study-chat-input-container`: Input bar (flex-shrink: 0, position: sticky)
 
-1. **Timestamp**: Absolutely fixed, no position/margin changes regardless of accordion state
-2. **Swedish Text**: Equal top/bottom margins when accordion is collapsed
-3. **Accordion Expansion**: When expanded, expressions section shrinks from top (upper divider moves down), but lower divider stays fixed
-4. **Expressions Lower Divider**: Draggable, can collapse to show only title
-5. **Chat Input**: Fixed to bottom of modal container
-6. **Window Size**: Modal container size doesn't change with drags or accordion state
+### Current Issues:
 
-## Implementation Details
+1. **Accordion expand/collapse**: Code attempts to fix divider but may have timing issues
+2. **Chat input**: Uses `position: sticky` which may not work perfectly with flex layout
+3. **Resizer**: Sets fixed `height` on `.study-chat-messages` which conflicts with `flex: 1 1 auto`
 
-### 1. Timestamp Section (Fixed)
+## Implementation Strategy
 
-**File**: `styles.css`
+### Feature 1: Divider Stays Fixed During Accordion Operations
 
-- Ensure `.study-timestamp-section` has `flex: 0 0 auto` (already correct)
-- Verify no margin/padding changes occur based on accordion state
-- Position: First child in modal content, always visible
+**Problem**: When accordion expands, `.study-item-display` grows, pushing divider down. Current code tries to compensate but may have timing issues.
 
-### 2. Swedish Text Section (Equal Margins When Collapsed)
+**Solution**:
 
-**File**: `styles.css`
+- Improve height calculation accuracy
+- Ensure expressions section height adjustment happens synchronously with accordion state change
+- Use a flag to prevent resizer from interfering during accordion operations
 
-- **`.study-item-display .swedish-text-wrapper`**: Add equal `margin-top` and `margin-bottom` when accordion is collapsed
-- Calculate: When collapsed, `.translation-accordion` has `padding-top: 16px` and `padding-bottom: 16px` but `max-height: 0`
-- Solution: Add `margin-top: 16px` to `.swedish-text-wrapper` to match accordion's padding-top when collapsed
-- Ensure `.study-item-display` padding doesn't interfere
+**Files to modify**: `renderer.js`
 
-### 3. Accordion-Driven Expressions Section Resizing
+- Add `isAccordionAnimating` flag in `setupTranslationAccordions()`
+- Set flag to `true` during accordion expand/collapse
+- Clear flag after transitions complete
+- In `setupStudyModalResizers()`, check flag and prevent resizing if accordion is animating
 
-**Files**: `renderer.js`, `styles.css`
+### Feature 2: Chat Input Fixed at Bottom
 
-**JavaScript Changes** (`renderer.js`):
+**Problem**: `position: sticky` may not work reliably with flex layout. Need true fixed positioning relative to modal container.
 
-- Modify `setupTranslationAccordions()`:
-  - When accordion expands: Calculate accordion height, reduce expressions section height from top
-  - Store original expressions section height before accordion expansion
-  - When accordion collapses: Restore original expressions section height
-  - Key: Lower divider position stays fixed (expressions section shrinks from top only)
+**Solution**:
 
-**CSS Changes** (`styles.css`):
+- Ensure `.study-chat-container` uses flex layout properly
+- Keep `.study-chat-input-container` with `flex-shrink: 0` (already correct)
+- Remove `position: sticky` and rely on flexbox to keep it at bottom
+- Ensure `.study-chat-messages` can shrink/grow while input stays fixed
 
-- Add transition to `.study-expressions-section` for smooth height changes
-- Ensure expressions section can shrink below content height (overflow: hidden)
+**Files to modify**: `styles.css`
 
-### 4. Expressions Lower Divider (Draggable)
+- Verify `.study-chat-container` has `flex: 1 1 auto` and `min-height: 0`
+- Verify `.study-chat-messages` has `flex: 1 1 auto` and `min-height: 0`
+- Verify `.study-chat-input-container` has `flex-shrink: 0`
+- Remove `position: sticky` from `.study-chat-input-container` if present
+
+### Feature 3: Divider Draggable (Except During Accordion Operations)
+
+**Problem**: Resizer sets fixed `height` on `.study-chat-messages` which conflicts with `flex: 1 1 auto`. Need to override flex during resize.
+
+**Solution**:
+
+- When resizing starts: Capture current heights, override flex with `flex: 0 0 auto`
+- During resize: Set fixed heights on both sections
+- When resizing ends: Keep fixed heights (saved to localStorage)
+- On restore: Apply saved heights with flex override
+- Prevent resizing if accordion is animating (using flag from Feature 1)
+
+**Files to modify**: `renderer.js`
+
+- In `setupStudyModalResizers()` mousedown: Override `.study-chat-messages` flex to `0 0 auto`
+- In mousemove: Set fixed heights (already done)
+- In mouseup: Keep flex override, save heights
+- In `restoreStudyModalHeights()`: Apply flex override if saved height exists
+- Add check for `isAccordionAnimating` flag before allowing resize
+
+## Detailed Implementation Steps
+
+### Step 1: Add Accordion Animation Flag
 
 **File**: `renderer.js`
 
-- Modify `setupStudyModalResizers()`:
-  - Current logic handles `expressions-chat` resizer correctly
-  - Ensure minimum height calculation allows collapsing to title only
-  - Calculate `minExpressionsHeight` based on title height + padding only
-  - When collapsed to minimum, content area should be hidden (overflow: hidden)
+- In `setupTranslationAccordions()`, create module-level variable `let isAccordionAnimating = false`
+- Set to `true` at start of expand/collapse
+- Set to `false` after transitions complete (in requestAnimationFrame callback)
 
-### 5. Chat Input Fixed to Modal Bottom
+### Step 2: Prevent Resizer During Accordion Animation
 
-**Files**: `styles.css`, `index.html` (if needed)
+**File**: `renderer.js`
 
-**CSS Changes** (`styles.css`):
+- In `setupStudyModalResizers()` mousedown handler, check `isAccordionAnimating`
+- If true, return early (prevent resize start)
+- Also check in mousemove handler as safety
 
-- **`.study-chat-container`**: Change from `flex: 0 0 auto` to use absolute positioning or ensure it's always at bottom
-- **`.study-chat-input-container`**: Ensure it's `flex-shrink: 0` and positioned at bottom of chat container
-- Alternative: Use flexbox with `margin-top: auto` on messages to push input to bottom
-
-**Current Structure**:
-
-```
-.study-modal-content (flex column)
-  ├── .study-timestamp-section (flex: 0 0 auto)
-  ├── .study-item-display (flex: 0 0 auto)
-  ├── .study-expressions-section (flex: 0 0 auto, height: 200px)
-  ├── .study-resizer (flex-shrink: 0)
-  └── .study-chat-container (flex: 0 0 auto)
-      ├── .study-chat-messages (flex: 0 0 auto, height: 200px)
-      └── .study-chat-input-container (flex-shrink: 0)
-```
-
-**Required Changes**:
-
-- Ensure `.study-chat-container` uses `display: flex; flex-direction: column`
-- `.study-chat-messages` should have `flex: 1 1 auto` with `min-height: 0` to allow shrinking
-- `.study-chat-input-container` should be `flex-shrink: 0` to stay fixed at bottom
-
-### 6. Window/Container Size Fixed
+### Step 3: Fix Chat Input Positioning
 
 **File**: `styles.css`
 
-- Ensure `.study-modal-content` has fixed `max-height: 700px` and `height: 90%`
-- Verify no JavaScript changes container dimensions
-- Internal scrolling handled by individual sections (expressions, chat messages)
+- Verify `.study-chat-input-container` does NOT have `position: sticky`
+- Ensure it only has `flex-shrink: 0`
+- Verify `.study-chat-container` uses flex column layout correctly
 
-## Implementation Steps
+### Step 4: Fix Resizer to Work with Flex Layout
 
-1. **Fix Swedish text margins when collapsed**
+**File**: `renderer.js`
 
-   - Add `margin-top: 16px` to `.swedish-text-wrapper` to match accordion padding
-   - Verify visual balance
+- In `setupStudyModalResizers()` mousedown:
+- Set `.study-chat-messages.style.flex = '0 0 auto'` to override default flex
+- Capture current height
+- In mousemove: Continue setting fixed heights (already correct)
+- In mouseup: Keep flex override, save heights
+- In `restoreStudyModalHeights()`:
+- If saved height exists: Set `flex: 0 0 auto` and `height: ${savedHeight}px`
+- If no saved height: Use default `flex: 1 1 auto`
 
-2. **Implement accordion-driven expressions resizing**
+### Step 5: Improve Accordion Height Calculation
 
-   - Modify `setupTranslationAccordions()` to calculate and apply height changes
-   - Ensure lower divider stays fixed (expressions shrinks from top)
-   - Add smooth transitions
+**File**: `renderer.js`
 
-3. **Ensure expressions divider can collapse to title only**
+- Ensure height difference calculation accounts for padding-top of expanded accordion
+- Verify the calculation uses the actual container height change, not just accordion element height
 
-   - Verify `minExpressionsHeight` calculation in `setupStudyModalResizers()`
-   - Test that content area hides when collapsed
+### Step 6: Test Edge Cases
 
-4. **Fix chat input to modal bottom**
-
-   - Adjust `.study-chat-container` flex properties
-   - Ensure `.study-chat-messages` can grow/shrink
-   - Keep `.study-chat-input-container` fixed at bottom
-
-5. **Verify timestamp remains fixed**
-
-   - Test that timestamp position doesn't change with accordion state
-   - Ensure no margin/padding adjustments affect it
-
-6. **Test modal container size stability**
-
-   - Verify container dimensions don't change during drags
-   - Ensure internal scrolling works correctly
+- Test accordion expand/collapse while resizing (should be prevented)
+- Test resizing after accordion operations (should work)
+- Test modal open with saved heights (should restore correctly)
+- Test chat input stays fixed during all operations
 
 ### To-dos
 
-- [ ] Add equal top/bottom margins to Swedish text wrapper when accordion is collapsed (margin-top: 16px to match accordion padding-top)
-- [ ] Modify setupTranslationAccordions() to shrink expressions section from top when accordion expands, keeping lower divider fixed
-- [ ] Ensure expressions lower divider can collapse to show only title (verify minExpressionsHeight calculation)
-- [ ] Adjust chat container flex properties to keep input fixed at bottom of modal
-- [ ] Verify timestamp section remains fixed regardless of accordion state
-- [ ] Test that modal container size remains stable during drags and accordion state changes
+- [ ] Add isAccordionAnimating flag in setupTranslationAccordions() to track accordion animation state
+- [ ] Prevent resizer from starting/continuing when isAccordionAnimating is true
+- [ ] Verify and fix chat input container CSS to ensure it stays fixed at bottom using flexbox only
+- [ ] Update resizer to override flex property on chat messages during resize and restore
+- [ ] Verify and improve accordion height difference calculation for accurate divider positioning
+- [ ] Update restoreStudyModalHeights() to properly handle flex override when restoring saved heights

@@ -1016,9 +1016,43 @@ async function handleFileSelect(file) {
                     status: 'analyzing (preserved)'
                 });
             }
+            
+            // Restore isFavorite from saved analyses if available
+            try {
+                if (window.electronAPI) {
+                    const result = await window.electronAPI.loadAnalyses();
+                    if (result.success) {
+                        const saved = result.data || [];
+                        const savedItem = saved.find(item => item.fileName === file.name && item.status !== 'processing');
+                        if (savedItem && savedItem.isFavorite !== undefined) {
+                            existingProject.isFavorite = savedItem.isFavorite;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading favorite status:', error);
+            }
         } else {
             // Add new project
             const projectId = 'project-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            let isFavorite = false;
+            
+            // Check if this file exists in saved analyses and restore favorite status
+            try {
+                if (window.electronAPI) {
+                    const result = await window.electronAPI.loadAnalyses();
+                    if (result.success) {
+                        const saved = result.data || [];
+                        const savedItem = saved.find(item => item.fileName === file.name && item.status !== 'processing');
+                        if (savedItem && savedItem.isFavorite !== undefined) {
+                            isFavorite = savedItem.isFavorite;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading favorite status:', error);
+            }
+            
             fileProjects.push({
                 id: projectId,
                 fileName: file.name,
@@ -1028,7 +1062,8 @@ async function handleFileSelect(file) {
                 progress: 0,
                 currentBatchIndex: 0,
                 processedBatches: [],
-                pausedAt: null
+                pausedAt: null,
+                isFavorite: isFavorite
             });
             // window.fileProjects is auto-synced via getter
             debugLog('➕ NEW PROJECT CREATED', {
@@ -2336,22 +2371,38 @@ async function analyzeProject(projectId) {
             const now = new Date().toISOString();
             let dateCreated = now;
             let dateEdited = now;
+            let isFavorite = false;
             
-            // If replacing a placeholder, preserve its dateCreated
+            // If replacing a placeholder, preserve its dateCreated and isFavorite
             if (placeholderId) {
                 const placeholderIndex = saved.findIndex(item => item.id === placeholderId);
-                if (placeholderIndex !== -1 && saved[placeholderIndex].dateCreated) {
-                    dateCreated = saved[placeholderIndex].dateCreated;
+                if (placeholderIndex !== -1) {
+                    if (saved[placeholderIndex].dateCreated) {
+                        dateCreated = saved[placeholderIndex].dateCreated;
+                    }
+                    if (saved[placeholderIndex].isFavorite !== undefined) {
+                        isFavorite = saved[placeholderIndex].isFavorite;
+                    }
                 }
             } else {
-                // If overwriting an existing entry, preserve its dateCreated
+                // If overwriting an existing entry, preserve its dateCreated and isFavorite
                 const overwriteIndex = saved.findIndex(item =>
                     item.fileName === finalFileName &&
                     item.status !== 'processing'
                 );
-                if (overwriteIndex !== -1 && saved[overwriteIndex].dateCreated) {
-                    dateCreated = saved[overwriteIndex].dateCreated;
+                if (overwriteIndex !== -1) {
+                    if (saved[overwriteIndex].dateCreated) {
+                        dateCreated = saved[overwriteIndex].dateCreated;
+                    }
+                    if (saved[overwriteIndex].isFavorite !== undefined) {
+                        isFavorite = saved[overwriteIndex].isFavorite;
+                    }
                 }
+            }
+            
+            // Preserve isFavorite from current project if it exists
+            if (currentProject && currentProject.isFavorite !== undefined) {
+                isFavorite = currentProject.isFavorite;
             }
             
             const completedAnalysis = {
@@ -2361,7 +2412,8 @@ async function analyzeProject(projectId) {
                 dateEdited: dateEdited, // Always update dateEdited on autosave
                 analysis: analysisData,
                 chatHistory: currentChatHistory,
-                subtitleData: currentSubtitleData
+                subtitleData: currentSubtitleData,
+                isFavorite: isFavorite
             };
             
             // Validate analysis data before saving
@@ -4078,8 +4130,8 @@ function renderInactiveSaves(inactiveItems) {
                 processingStatusText = `analyzing (${progress}%)`;
             }
             
-        // Format: File Name / Date Created(Status) / Date Edited(-)
-        // Per spec: Date Created shows status instead of date
+        // Format: File Name / Created(Status) / Last Studied(-)
+        // Per spec: Created shows status instead of date
             savedItem.innerHTML = `
                 <div class="saved-item-content-wrapper">
                     <div class="saved-item-content">
@@ -4136,12 +4188,17 @@ function renderActiveSaves(activeItems) {
         const checkboxHtml = isEditMode ? 
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
-        // Format: File Name / Date Edited / Date Created
+        // Format: File Name / Last Studied / Created
             savedItem.innerHTML = `
                 <div class="saved-item-content-wrapper">
                     ${checkboxHtml}
                     <div class="saved-item-content">
                         <div class="saved-item-top-row">
+                            <button class="favorite-star-btn ${item.isFavorite ? 'favorite-active' : ''}" data-item-id="${escapeHtml(item.id)}" title="${item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}" type="button">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="${item.isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+                                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                                </svg>
+                            </button>
                             <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
                         <span class="saved-item-date-edited">${dateEditedStr}</span>
                         <span class="saved-item-date-created">${dateCreatedStr}</span>
@@ -4316,9 +4373,10 @@ function renderActiveSaves(activeItems) {
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Exclude clicks on rename input and name span (handled separately)
+                // Exclude clicks on rename input, name span, and favorite button (handled separately)
                 if (e.target.classList.contains('saved-item-rename-input') ||
-                    e.target.classList.contains('saved-item-name')) {
+                    e.target.classList.contains('saved-item-name') ||
+                    e.target.closest('.favorite-star-btn')) {
                     return;
                 }
                 await reopenAnalysis(item);
@@ -4331,11 +4389,47 @@ function renderActiveSaves(activeItems) {
             savedItem.addEventListener('click', (e) => {
                 if (e.target.type !== 'checkbox' && 
                     !e.target.classList.contains('saved-item-rename-input') &&
-                    !e.target.classList.contains('saved-item-name')) {
+                    !e.target.classList.contains('saved-item-name') &&
+                    !e.target.closest('.favorite-star-btn')) {
                     const checkbox = savedItem.querySelector('.saved-item-checkbox');
                     if (checkbox) {
                         checkbox.checked = !checkbox.checked;
                     }
+                }
+            });
+        }
+        
+        // Add favorite star button click handler
+        const favoriteBtn = savedItem.querySelector('.favorite-star-btn');
+        if (favoriteBtn) {
+            favoriteBtn.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent triggering the item click
+                const itemId = favoriteBtn.dataset.itemId;
+                
+                try {
+                    // Load saved analyses
+                    let saved = [];
+                    if (window.electronAPI) {
+                        const result = await window.electronAPI.loadAnalyses();
+                        if (result.success) {
+                            saved = result.data || [];
+                        }
+                    }
+                    
+                    // Find and update the item
+                    const savedItem = saved.find(s => String(s.id) === String(itemId));
+                    if (savedItem) {
+                        savedItem.isFavorite = !savedItem.isFavorite;
+                        
+                        // Save back
+                        if (window.electronAPI) {
+                            await window.electronAPI.saveAnalyses(saved);
+                            // Reload to update the view
+                            await loadSavedAnalyses();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error toggling favorite:', error);
                 }
             });
         }
@@ -4351,6 +4445,13 @@ function sortActiveSaves(items) {
     };
     
     return [...items].sort((a, b) => {
+        // Favorites first
+        const aFavorite = a.isFavorite === true;
+        const bFavorite = b.isFavorite === true;
+        if (aFavorite && !bFavorite) return -1;
+        if (!aFavorite && bFavorite) return 1;
+        
+        // Then apply the selected sort
         let comparison = 0;
         
         if (currentSortColumn === 'fileName') {
@@ -5213,11 +5314,11 @@ async function openStudyModal(type, item, index, timestamp = null) {
         
         if (item.literal || (item.natural && item.natural !== item.literal)) {
             itemHtml += `<div class="translation-accordion" data-type="translations">`;
-            if (item.literal) {
+        if (item.literal) {
                 itemHtml += `<div class="translation-label">Literal Translation</div>`;
                 itemHtml += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
-            }
-            if (item.natural && item.natural !== item.literal) {
+        }
+        if (item.natural && item.natural !== item.literal) {
                 itemHtml += `<div class="translation-label">Natural Translation</div>`;
                 itemHtml += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
             }

@@ -11,6 +11,7 @@ let progressUpdateTimeouts = []; // Array to store progress update timeout IDs f
 
 // Constants
 const PROGRESS_UPDATE_THRESHOLD = 25; // Update progress every 25% threshold
+const STUDY_RESIZER_LOCK_MS = 350; // Keep study resizer fixed during accordion transitions
 
 // Unique ID generation: timestamp + counter to prevent collisions
 let idCounter = 0;
@@ -124,6 +125,7 @@ let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
 let currentStudyItem = null;
 let currentStudyChatHistory = [];
 let isEditMode = false;
+let studyResizerUnlockTimeout = null;
 
 // CEFR Level filtering
 let selectedLevels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'C3', 'Custom']; // All levels selected by default
@@ -1968,46 +1970,49 @@ async function analyzeProject(projectId) {
                 targetProject.fileName
             );
             
+            const cancelled = newName === null;
+            const whitespaceOnly = typeof newName === 'string' && newName.trim() === '';
+            
             debugLog('📝 RENAME MODAL RESULT', {
                 newName: newName,
-                cancelled: newName === null || newName === ''
+                cancelled: cancelled || whitespaceOnly
             }, 'info');
             
-            if (newName === null || newName === '') {
+            if (cancelled || whitespaceOnly) {
                 // User cancelled or entered empty name
-                if (newName === '') {
+                if (!cancelled) {
                     await showWarningModal('Filename cannot be empty.');
                 }
                 debugLog('❌ ANALYSIS CANCELLED', { reason: 'User cancelled duplicate filename rename' }, 'warn');
                 return;
             }
             
-            const trimmedName = newName.trim();
-            
             // Validate filename
-            const validationResult = validateFileName(trimmedName);
+            const validationResult = validateFileName(newName);
             if (!validationResult.valid) {
                 await showWarningModal(validationResult.error);
                 return;
             }
             
+            const sanitizedName = validationResult.sanitized;
+            
             // Check if new name also exists
             const newNameDuplicate = saved.find(item => 
-                item.fileName === trimmedName && 
+                item.fileName === sanitizedName && 
                 item.status !== 'processing' &&
                 item.analysis
             );
             
             if (newNameDuplicate) {
-                await showWarningModal(`A file with the name "${trimmedName}" already exists. Please choose a different name.`);
+                await showWarningModal(`A file with the name "${sanitizedName}" already exists. Please choose a different name.`);
                 return;
             }
             
             // Update filename
-            targetProject.fileName = trimmedName;
+            targetProject.fileName = sanitizedName;
             debugLog('📝 FILENAME UPDATED', {
                 oldName: duplicateAnalysis.fileName,
-                newName: trimmedName,
+                newName: sanitizedName,
                 projectId: targetProject.id
             });
             
@@ -4222,21 +4227,16 @@ function renderActiveSaves(activeItems) {
             renameInput.focus();
             renameInput.select();
         };
+        
+        // Function to save the rename
+        const saveRename = async () => {
+            const rawName = renameInput.value;
+            const originalName = item.fileName;
             
-            // Function to save the rename
-            const saveRename = async () => {
-                const newName = renameInput.value.trim();
-                if (!newName) {
-                    renameInput.value = item.fileName;
-                exitEditMode();
-                    return;
-                }
-                
-            // Validate filename: check for invalid characters, length, etc.
-            const validationResult = validateFileName(newName);
+            const validationResult = validateFileName(rawName);
             if (!validationResult.valid) {
                 debugLog('❌ INVALID FILENAME', {
-                    fileName: newName,
+                    fileName: rawName,
                     error: validationResult.error
                 }, 'error');
                 await showWarningModal(validationResult.error);
@@ -4245,67 +4245,78 @@ function renderActiveSaves(activeItems) {
                 return;
             }
             
-            // Check for duplicate filename before renaming
-                        let saved = [];
-                        if (window.electronAPI) {
-                            const result = await window.electronAPI.loadAnalyses();
-                            if (result.success) {
-                                saved = result.data || [];
-                            }
-                        }
-                        
-            // Check if new name already exists (excluding current item)
+            const sanitizedName = validationResult.sanitized;
+            
+            if (sanitizedName === item.fileName) {
+                renameInput.value = sanitizedName;
+                exitEditMode();
+                return;
+            }
+            
+            let saved = [];
+            if (window.electronAPI) {
+                const result = await window.electronAPI.loadAnalyses();
+                if (result.success) {
+                    saved = result.data || [];
+                }
+            }
+            
             const duplicateItem = saved.find(s => 
-                s.fileName === newName && 
+                s.fileName === sanitizedName && 
                 s.id !== item.id &&
-                s.status !== 'processing' && // Don't check against processing items
-                s.analysis // Must be completed (have analysis data)
+                s.status !== 'processing' &&
+                s.analysis
             );
             
             if (duplicateItem) {
-                await showWarningModal('A file with this name already exists.');
+                debugLog('⚠️ DUPLICATE FILENAME', {
+                    fileName: sanitizedName,
+                    duplicateId: duplicateItem.id
+                }, 'warn');
+                await showWarningModal(`A file with the name "${sanitizedName}" already exists. Please choose a different name.`);
                 renameInput.value = item.fileName;
                 exitEditMode();
                 return;
             }
             
-            if (newName !== item.fileName) {
-                item.fileName = newName;
-                
-                try {
-                        const index = saved.findIndex(s => s.id === item.id);
-                        if (index !== -1) {
-                            saved[index].fileName = newName;
-                        saved[index].dateEdited = new Date().toISOString();
-                        if (!saved[index].dateCreated) {
-                            saved[index].dateCreated = saved[index].dateEdited || new Date().toISOString();
-                        }
-                            
-                            if (window.electronAPI) {
-                                await window.electronAPI.saveAnalyses(saved);
-                                nameSpan.textContent = newName;
-                            item.fileName = newName;
-                            item.dateEdited = saved[index].dateEdited;
-                            // Reload to update date display
-                            await loadSavedAnalyses();
-                            }
-                        }
-                    } catch (error) {
-                    debugLog('❌ ERROR RENAMING FILE', {
-                        itemId: item.id,
-                        oldName: item.fileName,
-                        newName: newName,
-                        error: error.message,
-                        stack: error.stack
-                    }, 'error');
-                    await showWarningModal('Error renaming file: ' + error.message);
-                        renameInput.value = item.fileName;
-                    exitEditMode();
-                        return;
+            try {
+                const index = saved.findIndex(s => s.id === item.id);
+                if (index !== -1) {
+                    saved[index].fileName = sanitizedName;
+                    saved[index].dateEdited = new Date().toISOString();
+                    if (!saved[index].dateCreated) {
+                        saved[index].dateCreated = saved[index].dateEdited;
+                    }
+                    
+                    if (window.electronAPI) {
+                        await window.electronAPI.saveAnalyses(saved);
                     }
                 }
                 
-            exitEditMode();
+                item.fileName = sanitizedName;
+                if (index !== -1 && saved[index]) {
+                    item.dateEdited = saved[index].dateEdited;
+                } else {
+                    item.dateEdited = new Date().toISOString();
+                }
+                nameSpan.textContent = sanitizedName;
+                renameInput.value = sanitizedName;
+                
+                await loadSavedAnalyses();
+            } catch (error) {
+                debugLog('❌ ERROR RENAMING FILE', {
+                    itemId: item.id,
+                    oldName: originalName,
+                    newName: sanitizedName,
+                    error: error.message,
+                    stack: error.stack
+                }, 'error');
+                item.fileName = originalName;
+                await showWarningModal('Error renaming file: ' + error.message);
+                renameInput.value = item.fileName;
+            } finally {
+                exitEditMode();
+            }
         };
         
         const exitEditMode = () => {
@@ -4937,8 +4948,31 @@ function setupTranslationAccordions() {
                 accordion.classList.add('expanded');
                 button.classList.add('expanded');
             }
+
+            lockStudyResizerTemporarily();
         });
     });
+}
+
+function lockStudyResizerTemporarily(duration = STUDY_RESIZER_LOCK_MS) {
+    const resizer = document.querySelector('.study-resizer[data-resizer="expressions-chat"]');
+    if (!resizer) {
+        return;
+    }
+
+    // Prevent new drags while the accordion animation runs
+    resizer.classList.add('locked');
+    resizer.setAttribute('aria-disabled', 'true');
+
+    if (studyResizerUnlockTimeout) {
+        clearTimeout(studyResizerUnlockTimeout);
+    }
+
+    studyResizerUnlockTimeout = setTimeout(() => {
+        resizer.classList.remove('locked');
+        resizer.removeAttribute('aria-disabled');
+        studyResizerUnlockTimeout = null;
+    }, duration);
 }
 
 // Setup study modal resizers
@@ -4951,6 +4985,11 @@ function setupStudyModalResizers() {
     
     resizers.forEach(resizer => {
         resizer.addEventListener('mousedown', (e) => {
+            if (resizer.classList.contains('locked')) {
+                e.preventDefault();
+                return;
+            }
+
             e.preventDefault();
             isResizing = true;
             currentResizer = resizer;
@@ -4959,14 +4998,11 @@ function setupStudyModalResizers() {
             const resizerType = resizer.getAttribute('data-resizer');
             const studyExpressionsSection = document.getElementById('studyExpressionsSection');
             const studyChatMessages = document.getElementById('studyChatMessages');
-            const studyChatInputContainer = document.querySelector('.study-chat-input-container');
             
             // Only handle expressions-chat resizer
-            if (resizerType === 'expressions-chat') {
+            if (resizerType === 'expressions-chat' && studyExpressionsSection && studyChatMessages) {
                 startHeights.expressions = studyExpressionsSection.getBoundingClientRect().height;
                 startHeights.messages = studyChatMessages.getBoundingClientRect().height;
-                // Get input container height for minimum constraint
-                startHeights.inputHeight = studyChatInputContainer.getBoundingClientRect().height;
             }
             
             resizer.classList.add('resizing');
@@ -4984,27 +5020,25 @@ function setupStudyModalResizers() {
         const resizerType = currentResizer.getAttribute('data-resizer');
         const studyExpressionsSection = document.getElementById('studyExpressionsSection');
         const studyChatMessages = document.getElementById('studyChatMessages');
-        const studyChatInputContainer = document.querySelector('.study-chat-input-container');
         
         // Only handle expressions-chat resizer
-        if (resizerType === 'expressions-chat') {
-            // Get current input container height dynamically
-            const inputHeight = studyChatInputContainer.getBoundingClientRect().height;
-            const chatContainer = studyChatMessages.parentElement;
-            const containerHeight = chatContainer.getBoundingClientRect().height;
+        if (resizerType === 'expressions-chat' && studyExpressionsSection && studyChatMessages) {
+            const minMessagesHeight = 100;
+            const minExpressionsHeight = 100;
             
             // Calculate new messages height
             // When dragging UP (deltaY negative), messages should GROW (so subtract negative = add)
             // When dragging DOWN (deltaY positive), messages should SHRINK (so subtract positive = subtract)
             const newMessagesHeight = startHeights.messages - deltaY;
             
-            // Maximum messages height is container height minus input bar height
-            const maxMessagesHeight = containerHeight - inputHeight;
-            // Minimum messages height is 100px
-            const minMessagesHeight = 100;
+            const maxMessagesHeight = startHeights.messages + Math.max(0, startHeights.expressions - minExpressionsHeight);
+            const boundedMaxMessagesHeight = Math.max(minMessagesHeight, maxMessagesHeight);
             
             // Constrain the messages height
-            const constrainedMessagesHeight = Math.max(minMessagesHeight, Math.min(newMessagesHeight, maxMessagesHeight));
+            const constrainedMessagesHeight = Math.max(
+                minMessagesHeight,
+                Math.min(newMessagesHeight, boundedMaxMessagesHeight)
+            );
             
             // Calculate how much messages actually changed (after constraints)
             const actualMessagesDelta = constrainedMessagesHeight - startHeights.messages;
@@ -5012,7 +5046,10 @@ function setupStudyModalResizers() {
             // Adjust expressions section height opposite to messages change
             // When messages grow (positive delta), expressions shrink (subtract delta)
             // When messages shrink (negative delta), expressions grow (subtract negative = add)
-            const newExpressionsHeight = Math.max(100, startHeights.expressions - actualMessagesDelta);
+            const newExpressionsHeight = Math.max(
+                minExpressionsHeight,
+                startHeights.expressions - actualMessagesDelta
+            );
             
             studyExpressionsSection.style.height = `${newExpressionsHeight}px`;
             studyChatMessages.style.height = `${constrainedMessagesHeight}px`;
@@ -6391,13 +6428,16 @@ function validateAnalysisData(analysisData) {
     return { valid: true };
 }
 
-// Validate filename for rename operations
+// Validate filename for rename operations (returns sanitized trimmed value when valid)
 function validateFileName(fileName) {
     if (!fileName || typeof fileName !== 'string') {
         return { valid: false, error: 'Filename cannot be empty' };
     }
     
+    const hasOuterWhitespace = /^\s|\s$/.test(fileName);
+    const hasTrailingDot = /\.$/.test(fileName);
     const trimmed = fileName.trim();
+    
     if (trimmed.length === 0) {
         return { valid: false, error: 'Filename cannot be empty' };
     }
@@ -6424,11 +6464,11 @@ function validateFileName(fileName) {
     }
     
     // Check for leading/trailing spaces or dots (Windows doesn't allow these)
-    if (trimmed.startsWith('.') || trimmed.endsWith('.') || trimmed.endsWith(' ')) {
+    if (trimmed.startsWith('.') || hasTrailingDot || hasOuterWhitespace) {
         return { valid: false, error: 'Filename cannot start with a dot or end with a dot or space' };
     }
     
-    return { valid: true };
+    return { valid: true, sanitized: trimmed };
 }
 
 // Cleanup unfinished files (for exit handling)
@@ -6531,4 +6571,3 @@ async function cleanupInactiveSavesOnStartup() {
 
 // Expose cleanup function to window for IPC access
 window.cleanupUnfinishedFiles = cleanupUnfinishedFiles;
-

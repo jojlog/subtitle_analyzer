@@ -1335,6 +1335,7 @@ body.theme-purple .add-to-list-btn:hover {
 
 .chat-input-container {
     display: flex;
+    flex-shrink: 0;
     gap: 8px;
     padding: 16px;
     border-top: 1px solid #333;
@@ -1570,12 +1571,11 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-item-display {
-    flex: 0 0 auto;
-    padding: 16px 24px 16px 24px;
-    overflow: visible;
-    height: auto;
-    min-height: auto;
-    max-height: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 16px 24px;
+    overflow-y: auto;
+    overflow-x: hidden;
     border-bottom: 1px solid #333;
 }
 
@@ -1594,6 +1594,10 @@ body.theme-purple .add-to-list-btn:hover {
 
 .study-resizer.resizing {
     background-color: #ff6600;
+}
+
+.study-resizer.locked {
+    cursor: not-allowed;
 }
 
 .study-resizer::before {
@@ -1795,8 +1799,7 @@ body.theme-purple .add-to-list-btn:hover {
 .study-chat-container {
     display: flex !important;
     flex-direction: column;
-    flex: 1 1 auto;
-    min-height: 0;
+    flex: 0 0 auto;
     background-color: var(--bg-secondary);
     transition: background-color 0.3s ease;
     visibility: visible !important;
@@ -1911,8 +1914,7 @@ body.theme-purple .add-to-list-btn:hover {
 .study-chat-container {
     display: flex !important;
     flex-direction: column;
-    flex: 1 1 auto;
-    min-height: 0;
+    flex: 0 0 auto;
     background-color: var(--bg-secondary);
     transition: background-color 0.3s ease;
     visibility: visible !important;
@@ -2082,5 +2084,3 @@ body.theme-purple .add-to-list-btn:hover {
 .expression-item:hover {
     background-color: #111;
 }
-
-

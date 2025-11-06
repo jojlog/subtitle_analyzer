@@ -679,11 +679,11 @@ body.theme-purple {
     display: grid;
     grid-template-columns: var(--col-width-0, 2fr) 15px var(--col-width-1, 2fr) 15px var(--col-width-2, 2fr);
     gap: 0;
+    column-gap: 0;
     padding: 12px 16px;
     background-color: var(--bg-tertiary);
     border-radius: 8px;
     border: 1px solid var(--border-color);
-    position: relative;
 }
 
 .sortable-column {
@@ -700,33 +700,58 @@ body.theme-purple {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-sizing: border-box;
+    text-align: left;
 }
 
 .column-resizer {
     width: 1px;
     cursor: col-resize;
-    background-color: rgba(255, 255, 255, 0.15);
-    transition: background-color 0.2s, width 0.2s;
+    background-color: transparent;
+    transition: background-color 0.2s;
     position: relative;
     z-index: 10;
-    margin: 0 7px;
+    margin: 0;
     min-height: 20px;
     flex-shrink: 0;
+    justify-self: stretch;
+    align-self: stretch;
 }
 
 .column-resizer:hover {
-    width: 2px;
-    background-color: var(--accent-color);
-    margin: 0 6px;
+    background-color: transparent;
 }
 
 .column-resizer.resizing {
-    width: 2px;
-    background-color: var(--accent-color);
-    margin: 0 6px;
+    background-color: transparent;
 }
 
 .column-resizer::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: rgba(255, 255, 255, 0.15);
+    cursor: col-resize;
+    transform: translateX(-0.5px);
+    transition: width 0.2s, background-color 0.2s;
+}
+
+.column-resizer:hover::before {
+    width: 2px;
+    background-color: var(--accent-color);
+    transform: translateX(-1px);
+}
+
+.column-resizer.resizing::before {
+    width: 2px;
+    background-color: var(--accent-color);
+    transform: translateX(-1px);
+}
+
+.column-resizer::after {
     content: '';
     position: absolute;
     left: -6px;
@@ -820,16 +845,28 @@ body.theme-purple {
 
 .saved-item-date-edited,
 .saved-item-date-created {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+    text-align: left;
+}
+
+.saved-item-date-edited {
+    grid-column: 3;
+}
+
+.saved-item-date-created {
+    grid-column: 5;
 }
 
 /* Inactive saves use same grid layout but without rename button column */
 .saved-item-inactive .saved-item-top-row {
-    grid-template-columns: 2fr 2fr 2fr;
+    grid-template-columns: var(--col-width-0, 2fr) 15px var(--col-width-1, 2fr) 15px var(--col-width-2, 2fr);
 }
 
 .saved-item-name {
@@ -838,6 +875,12 @@ body.theme-purple {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 14px;
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+    text-align: left;
+    grid-column: 1;
 }
 
 .saved-item-status {
@@ -962,10 +1005,12 @@ body.theme-purple {
 
 .saved-item-top-row {
     display: grid;
-    grid-template-columns: var(--col-width-0, 2fr) var(--col-width-1, 2fr) var(--col-width-2, 2fr);
+    grid-template-columns: var(--col-width-0, 2fr) 15px var(--col-width-1, 2fr) 15px var(--col-width-2, 2fr);
     gap: 0;
+    column-gap: 0;
     align-items: center;
     padding: 0 8px;
+    box-sizing: border-box;
 }
 
 .saved-item-bottom-row {

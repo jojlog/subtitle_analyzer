@@ -1376,6 +1376,7 @@ body.theme-purple .add-to-list-btn:hover {
     display: flex;
     flex-direction: column;
     border: 1px solid #333;
+    overflow: hidden;
 }
 
 .study-header {
@@ -1509,10 +1510,40 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-item-display {
-    flex: 1;
+    flex: 0 0 auto;
     padding: 24px;
     overflow-y: auto;
+    height: auto;
+    min-height: 150px;
+    max-height: none;
     border-bottom: 1px solid #333;
+}
+
+.study-resizer {
+    height: 4px;
+    background-color: #333;
+    cursor: row-resize;
+    flex-shrink: 0;
+    position: relative;
+    transition: background-color 0.2s;
+}
+
+.study-resizer:hover {
+    background-color: #ff6600;
+}
+
+.study-resizer.resizing {
+    background-color: #ff6600;
+}
+
+.study-resizer::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 0;
+    right: 0;
+    height: 12px;
+    cursor: row-resize;
 }
 
 .study-item-display .swedish-text {
@@ -1554,9 +1585,11 @@ body.theme-purple .add-to-list-btn:hover {
 /* Study Expressions Section */
 .study-expressions-section {
     padding: 20px 24px;
-    border-bottom: 1px solid #333;
     background-color: #0a0a0a;
-    max-height: 200px;
+    flex: 0 0 auto;
+    height: 200px;
+    min-height: 100px;
+    max-height: none;
     overflow-y: auto;
 }
 
@@ -1641,16 +1674,19 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-chat-container {
-    display: flex;
+    display: flex !important;
     flex-direction: column;
-    height: 300px;
-    max-height: 40vh;
+    flex: 0 0 auto;
+    min-height: 200px;
     background-color: var(--bg-secondary);
     transition: background-color 0.3s ease;
+    visibility: visible !important;
 }
 
 .study-chat-messages {
-    flex: 1;
+    flex: 0 0 auto;
+    height: 300px;
+    min-height: 100px;
     overflow-y: auto;
     padding: 16px;
     display: flex;
@@ -1755,10 +1791,12 @@ body.theme-purple .add-to-list-btn:hover {
 
 .study-chat-input-container {
     display: flex;
+    flex-shrink: 0;
     gap: 8px;
     padding: 16px;
     border-top: 1px solid #333;
     background-color: #000;
+    height: auto;
 }
 
 .study-chat-input {

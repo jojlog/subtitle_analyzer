@@ -4813,7 +4813,115 @@ async function reopenAnalysis(savedItem) {
     // Note: Modal event listeners for renameModal and warningModal are handled 
     // within the showRenameModal() and showWarningModal() functions themselves
     // to avoid conflicts with promise-based handlers
+    
+    // Setup study modal resizers
+    setupStudyModalResizers();
 }); // End of DOMContentLoaded
+
+// Setup study modal resizers
+function setupStudyModalResizers() {
+    const resizers = document.querySelectorAll('.study-resizer');
+    let isResizing = false;
+    let currentResizer = null;
+    let startY = 0;
+    let startHeights = {};
+    
+    resizers.forEach(resizer => {
+        resizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isResizing = true;
+            currentResizer = resizer;
+            startY = e.clientY;
+            
+            const resizerType = resizer.getAttribute('data-resizer');
+            const studyExpressionsSection = document.getElementById('studyExpressionsSection');
+            const studyChatMessages = document.getElementById('studyChatMessages');
+            const studyChatInputContainer = document.querySelector('.study-chat-input-container');
+            
+            // Only handle expressions-chat resizer
+            if (resizerType === 'expressions-chat') {
+                startHeights.expressions = studyExpressionsSection.getBoundingClientRect().height;
+                startHeights.messages = studyChatMessages.getBoundingClientRect().height;
+                // Get input container height for minimum constraint
+                startHeights.inputHeight = studyChatInputContainer.getBoundingClientRect().height;
+            }
+            
+            resizer.classList.add('resizing');
+            document.body.style.cursor = 'row-resize';
+            document.body.style.userSelect = 'none';
+        });
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing || !currentResizer) return;
+        
+        e.preventDefault();
+        
+        const deltaY = e.clientY - startY;
+        const resizerType = currentResizer.getAttribute('data-resizer');
+        const studyExpressionsSection = document.getElementById('studyExpressionsSection');
+        const studyChatMessages = document.getElementById('studyChatMessages');
+        const studyChatInputContainer = document.querySelector('.study-chat-input-container');
+        
+        // Only handle expressions-chat resizer
+        if (resizerType === 'expressions-chat') {
+            // Get current input container height dynamically
+            const inputHeight = studyChatInputContainer.getBoundingClientRect().height;
+            const chatContainer = studyChatMessages.parentElement;
+            const containerHeight = chatContainer.getBoundingClientRect().height;
+            
+            // Calculate new messages height (grows/shrinks with drag)
+            const newMessagesHeight = startHeights.messages + deltaY;
+            
+            // Maximum messages height is container height minus input bar height
+            const maxMessagesHeight = containerHeight - inputHeight;
+            // Minimum messages height is 100px
+            const minMessagesHeight = 100;
+            
+            // Constrain the messages height
+            const constrainedMessagesHeight = Math.max(minMessagesHeight, Math.min(newMessagesHeight, maxMessagesHeight));
+            
+            // Adjust expressions section height opposite to messages (when messages grow, expressions shrink)
+            const messagesDelta = constrainedMessagesHeight - startHeights.messages;
+            const newExpressionsHeight = Math.max(100, startHeights.expressions - messagesDelta);
+            
+            studyExpressionsSection.style.height = `${newExpressionsHeight}px`;
+            studyChatMessages.style.height = `${constrainedMessagesHeight}px`;
+            
+            // Save to localStorage
+            localStorage.setItem('studyExpressionsHeight', newExpressionsHeight);
+            localStorage.setItem('studyChatMessagesHeight', constrainedMessagesHeight);
+        }
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            if (currentResizer) {
+                currentResizer.classList.remove('resizing');
+            }
+            currentResizer = null;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+    });
+}
+
+// Restore study modal section heights from localStorage
+function restoreStudyModalHeights() {
+    const studyExpressionsSection = document.getElementById('studyExpressionsSection');
+    const studyChatMessages = document.getElementById('studyChatMessages');
+    
+    if (studyExpressionsSection) {
+        const savedHeight = localStorage.getItem('studyExpressionsHeight');
+        studyExpressionsSection.style.height = savedHeight ? savedHeight + 'px' : '200px';
+    }
+    
+    if (studyChatMessages) {
+        const savedHeight = localStorage.getItem('studyChatMessagesHeight');
+        studyChatMessages.style.height = savedHeight ? savedHeight + 'px' : '200px';
+    }
+}
 
 // Modal functions
 function showRenameModal(message, defaultValue = '') {
@@ -5033,6 +5141,16 @@ function formatTimestamp(timestamp) {
 async function openStudyModal(type, item, index, timestamp = null) {
     currentStudyItem = { type, item, index, timestamp };
     currentStudyChatHistory = [];
+    
+    // Restore saved section heights
+    restoreStudyModalHeights();
+    
+    // Ensure chat container is visible
+    const studyChatContainer = document.querySelector('.study-chat-container');
+    if (studyChatContainer) {
+        studyChatContainer.style.display = 'flex';
+        studyChatContainer.style.visibility = 'visible';
+    }
     
     // Display the item
     studyItemContent.innerHTML = '';

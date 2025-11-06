@@ -5412,15 +5412,7 @@ function displayStudyExpressions() {
         expressionsToShow = [];
     }
     
-    // Filter expressions by selected levels from main window filter
-    expressionsToShow = expressionsToShow.filter(expr => {
-        // If expression has no level field, show it (backward compatibility)
-        if (!expr.level) {
-            return true;
-        }
-        // Only show expressions matching selected levels from main window filter
-        return selectedLevels.includes(expr.level);
-    });
+    // Show all expressions (no level filtering in study modal)
     
     if (expressionsToShow.length > 0) {
         expressionsToShow.forEach(expr => {

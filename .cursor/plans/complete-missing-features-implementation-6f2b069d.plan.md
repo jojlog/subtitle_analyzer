@@ -1,48 +1,82 @@
-<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 44504d33-24cd-49b2-8fbe-7bb9b4f4af0e -->
-# Fix Duplicate Name Modal Not Appearing
+<!-- 6f2b069d-ec91-4d4c-8195-af81c5bbdda6 a9b7cb3e-2092-4a31-ae7c-2a1a59b48350 -->
+# Fix Study Modal Layout Structure
 
-## Problem Analysis
+## Problem
 
-The duplicate filename modal (`showRenameModal`) is not appearing when clicking Start on a file with a duplicate name. Potential issues:
+The layout broke after changing flex settings. The expressions and chat sections use `flex: 0 0 auto` which prevents proper resizing. Need to restore a classic 3-part flex column structure.
 
-1. **Event Listener Conflict**: The DOMContentLoaded event listeners (lines 4600-4607) immediately close the modal, conflicting with the promise-based handlers in `showRenameModal`
-2. **Duplicate Check May Not Trigger**: The duplicate check conditions might be too strict or not finding duplicates
-3. **Modal Visibility Issues**: CSS z-index or display issues might hide the modal
+## Solution
 
-## Implementation Steps
+Restructure the CSS to create a proper flex hierarchy:
 
-### Step 1: Fix Event Listener Conflict
+1. **Fixed top**: Header + script line (flex: 0 0 auto)
+2. **Resizable middle**: Wrapper containing expressions + resizer + chat messages (flex: 1 1 auto; min-height: 0)
+3. **Fixed bottom**: Chat input bar (flex-shrink: 0)
 
-- Remove the conflicting event listeners in DOMContentLoaded that close the modal immediately
-- Ensure only the promise-based handlers in `showRenameModal` control the modal behavior
-- The modal should only close when the promise resolves (Confirm/Cancel buttons clicked)
+## Changes
 
-### Step 2: Add Debug Logging
+### CSS (`styles.css`)
 
-- Add console logging to verify the duplicate check is running
-- Log when duplicate is found and modal should be shown
-- Verify modal elements exist before showing
+1. **`.study-item-display`** (Script line - already correct):
 
-### Step 3: Verify Modal Function
+- Keep `flex: 0 0 auto` (fixed position)
+- Keep `overflow: visible` (no scrolling, shows full content)
 
-- Ensure `showRenameModal` properly handles the modal display
-- Add error handling if modal elements don't exist
-- Verify z-index is high enough (should be 10000)
+2. **Create wrapper for resizable middle section**:
 
-### Step 4: Test Duplicate Check Logic
+- Add new class `.study-resizable-middle` or use existing structure
+- Set `flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;`
+- This wrapper will contain: expressions section + resizer + chat messages
 
-- Verify the duplicate check conditions are correct:
-- `item.fileName === targetProject.fileName`
-- `item.status !== 'processing'`
-- `item.analysis` exists (completed file)
-- Test with actual duplicate files to ensure check triggers
+3. **`.study-expressions-section`**:
 
-### Step 5: Add Error Handling
+- Change from `flex: 0 0 auto` to `flex: 0 0 auto` (keep fixed size, controlled by height)
+- Remove `max-height: none` constraint
+- Keep `overflow-y: auto` for scrolling content
+- Move `max-height` constraint to `.study-expressions-content` instead
 
-- Wrap modal show in try-catch
-- Log errors if modal fails to show
-- Add fallback behavior if modal doesn't work
+4. **`.study-expressions-content`**:
 
-## Files to Modify
+- Add `max-height: 300px` or similar (move from parent)
+- Add `overflow-y: auto` if not already present
 
-- `renderer.js`: Fix event listener conflicts, add debug logging, improve error handling
+5. **`.study-chat-container`**:
+
+- Change from `flex: 0 0 auto` to `flex: 1 1 auto; min-height: 0`
+- This allows it to grow/shrink within the resizable middle wrapper
+
+6. **`.study-chat-messages`**:
+
+- Keep `flex: 0 0 auto` (size controlled by height)
+- Keep `min-height: 0` (can shrink to 0)
+- Keep `overflow-y: auto`
+
+7. **`.study-chat-input-container`**:
+
+- Keep `flex-shrink: 0` (fixed at bottom)
+- Already has `display: flex !important` and `visibility: visible !important`
+
+### HTML (`index.html`) - If needed
+
+If the current HTML structure doesn't support the wrapper approach, we may need to:
+
+- Wrap `.study-expressions-section` + `.study-resizer` + `.study-chat-container` (but exclude `.study-chat-input-container`) in a new div
+- OR restructure so chat messages are separate from chat container
+
+### JavaScript (`renderer.js`)
+
+The resizing logic should remain mostly the same, but verify:
+
+- Minimum expressions height calculation (heading + padding) is correct
+- Chat messages can shrink to 0 (minMessagesHeight = 0)
+- The resizing works within the new flex structure
+
+## Verification
+
+After changes:
+
+- Script line shows full content (no scrolling)
+- Expressions section can resize with minimum = heading + padding
+- Chat messages can shrink to 0 (completely hidden)
+- Chat input bar stays fixed at bottom
+- Middle section (expressions ↔ chat) can grow/shrink properly

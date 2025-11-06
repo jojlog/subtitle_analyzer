@@ -4818,6 +4818,28 @@ async function reopenAnalysis(savedItem) {
     setupStudyModalResizers();
 }); // End of DOMContentLoaded
 
+// Setup translation accordions
+function setupTranslationAccordions() {
+    const accordionButtons = document.querySelectorAll('.accordion-btn');
+    accordionButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const type = button.getAttribute('data-type');
+            const accordion = document.querySelector(`.translation-accordion[data-type="${type}"]`);
+            if (!accordion) return;
+            
+            const isExpanded = accordion.classList.contains('expanded');
+            
+            if (isExpanded) {
+                accordion.classList.remove('expanded');
+                button.classList.remove('expanded');
+            } else {
+                accordion.classList.add('expanded');
+                button.classList.add('expanded');
+            }
+        });
+    });
+}
+
 // Setup study modal resizers
 function setupStudyModalResizers() {
     const resizers = document.querySelectorAll('.study-resizer');
@@ -5163,28 +5185,53 @@ async function openStudyModal(type, item, index, timestamp = null) {
     studyExpressionsContent.innerHTML = '';
     studyExpressionsSection.style.display = 'block'; // Always show the section
     
+    // Get timestamp content element
+    const studyTimestampContent = document.getElementById('studyTimestampContent');
+    if (studyTimestampContent) {
+        studyTimestampContent.innerHTML = '';
+    }
+    
     if (type === 'translation') {
         studyTitle.textContent = 'Line-by-Line Study';
-        let html = '';
+        let timestampHtml = '';
+        let itemHtml = '';
         
-        // Display timestamp at the top
+        // Display timestamp in separate section
         if (timestamp && timestamp.start) {
-            html += `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
+            timestampHtml = `<div class="study-timestamp">${escapeHtml(timestamp.start)}</div>`;
         }
         
-        html += `<div class="swedish-text">${escapeHtml(fixEncoding(item.swedish))}</div>`;
+        // Display Swedish text and translations in item section
+        itemHtml += `<div class="swedish-text-wrapper">
+            <div class="swedish-text">${escapeHtml(fixEncoding(item.swedish))}</div>
+            ${(item.literal || (item.natural && item.natural !== item.literal)) ? `<button class="accordion-btn" data-type="translations" aria-label="Toggle translations">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9l6 6 6-6"/>
+                </svg>
+            </button>` : ''}
+        </div>`;
         
-        if (item.literal) {
-            html += `<div class="translation-label">Literal Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
+        if (item.literal || (item.natural && item.natural !== item.literal)) {
+            itemHtml += `<div class="translation-accordion" data-type="translations">`;
+            if (item.literal) {
+                itemHtml += `<div class="translation-label">Literal Translation</div>`;
+                itemHtml += `<div class="translation-text">${escapeHtml(fixEncoding(item.literal))}</div>`;
+            }
+            if (item.natural && item.natural !== item.literal) {
+                itemHtml += `<div class="translation-label">Natural Translation</div>`;
+                itemHtml += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
+            }
+            itemHtml += `</div>`;
         }
         
-        if (item.natural && item.natural !== item.literal) {
-            html += `<div class="translation-label">Natural Translation</div>`;
-            html += `<div class="translation-text">${escapeHtml(fixEncoding(item.natural))}</div>`;
+        // Set content in separate sections
+        if (studyTimestampContent) {
+            studyTimestampContent.innerHTML = timestampHtml;
         }
+        studyItemContent.innerHTML = itemHtml;
         
-        studyItemContent.innerHTML = html;
+        // Setup accordion functionality
+        setupTranslationAccordions();
         
         // Display related expressions using displayStudyExpressions() for consistency
         displayStudyExpressions();
@@ -5244,7 +5291,6 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             html += `<div style="margin-top: 12px; padding: 12px; background-color: #111; border-radius: 6px; color: #999; font-size: 14px;">Example: ${escapeHtml(fixEncoding(item.example))}</div>`;
         }
         
-        studyItemContent.innerHTML = html;
         
         // Show empty expressions section for expression type too
         studyExpressionsContent.innerHTML = '<p style="color: #666; text-align: center; padding: 16px;">No expressions found for this translation.</p>';

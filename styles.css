@@ -1510,12 +1510,18 @@ body.theme-purple .add-to-list-btn:hover {
     cursor: not-allowed;
 }
 
+.study-timestamp-section {
+    flex: 0 0 auto;
+    padding: 16px 24px;
+    border-bottom: 1px solid #333;
+}
+
 .study-item-display {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     padding: 24px;
-    overflow-y: auto;
+    overflow: visible;
     height: auto;
-    min-height: 150px;
+    min-height: auto;
     max-height: none;
     border-bottom: 1px solid #333;
 }
@@ -1547,11 +1553,69 @@ body.theme-purple .add-to-list-btn:hover {
     cursor: row-resize;
 }
 
+.study-item-display .swedish-text-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 0;
+}
+
 .study-item-display .swedish-text {
     font-size: 20px;
     font-weight: 600;
     color: #fff;
-    margin-bottom: 16px;
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.accordion-btn-group {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.accordion-btn {
+    background: transparent;
+    border: none;
+    color: #999;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.accordion-btn:hover {
+    color: #ff6600;
+}
+
+.accordion-btn svg {
+    transition: transform 0.2s ease;
+}
+
+.accordion-btn.expanded svg {
+    transform: rotate(180deg);
+}
+
+.accordion-btn.expanded {
+    color: #ff6600;
+}
+
+.translation-accordion {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, padding-top 0.3s ease, padding-bottom 0.3s ease;
+    padding-top: 16px;
+    padding-bottom: 16px;
+}
+
+.translation-accordion.expanded {
+    max-height: 500px;
+    padding-top: 16px;
+    padding-bottom: 16px;
 }
 
 .study-item-display .translation-label {
@@ -1875,9 +1939,9 @@ body.theme-purple .add-to-list-btn:hover {
     color: #ff6600;
     font-size: 14px;
     font-family: monospace;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid #333;
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 /* Study header actions */

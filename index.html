@@ -150,15 +150,17 @@
                 
                 <!-- Sortable Header for Active Saves -->
                 <div id="activeSavesHeader" class="active-saves-header" style="display: none;">
-                    <div class="sortable-header">
+                    <div class="sortable-header" id="sortableHeader">
                         <div class="sortable-column" data-sort="fileName">
                             <span>File Name</span>
                             <span class="sort-arrow">▼</span>
                         </div>
+                        <div class="column-resizer" data-column="0"></div>
                         <div class="sortable-column" data-sort="dateEdited">
                             <span>Date Edited</span>
                             <span class="sort-arrow"></span>
                         </div>
+                        <div class="column-resizer" data-column="1"></div>
                         <div class="sortable-column" data-sort="dateCreated">
                             <span>Date Created</span>
                             <span class="sort-arrow"></span>

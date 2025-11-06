@@ -4398,6 +4398,109 @@ function setupSorting() {
             loadSavedAnalyses();
         });
     });
+    
+    // Setup column resizing
+    setupColumnResizing();
+}
+
+// Setup column resizing functionality
+function setupColumnResizing() {
+    const sortableHeader = document.getElementById('sortableHeader');
+    if (!sortableHeader) return;
+    
+    const resizers = sortableHeader.querySelectorAll('.column-resizer');
+    let isResizing = false;
+    let currentResizer = null;
+    let startX = 0;
+    let startWidths = [];
+    let headerRect = null;
+    
+    // Load saved column widths from localStorage
+    const savedWidths = localStorage.getItem('savedAnalysesColumnWidths');
+    if (savedWidths) {
+        try {
+            const widths = JSON.parse(savedWidths);
+            if (Array.isArray(widths) && widths.length === 3) {
+                document.documentElement.style.setProperty('--col-width-0', `${widths[0]}px`);
+                document.documentElement.style.setProperty('--col-width-1', `${widths[1]}px`);
+                document.documentElement.style.setProperty('--col-width-2', `${widths[2]}px`);
+            }
+        } catch (e) {
+            console.error('Error loading saved column widths:', e);
+        }
+    }
+    
+    resizers.forEach((resizer, index) => {
+        resizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            isResizing = true;
+            currentResizer = resizer;
+            startX = e.clientX;
+            headerRect = sortableHeader.getBoundingClientRect();
+            
+            // Get current column widths
+            const columns = sortableHeader.querySelectorAll('.sortable-column');
+            startWidths = Array.from(columns).map(col => col.getBoundingClientRect().width);
+            
+            resizer.classList.add('resizing');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing || !currentResizer) return;
+        
+        e.preventDefault();
+        
+        const deltaX = e.clientX - startX;
+        const resizerIndex = parseInt(currentResizer.getAttribute('data-column'));
+        
+        // Calculate new widths
+        const newWidths = [...startWidths];
+        const leftColumnIndex = resizerIndex;
+        const rightColumnIndex = resizerIndex + 1;
+        
+        // Minimum column width (100px)
+        const minWidth = 100;
+        
+        // Adjust left and right columns
+        const leftNewWidth = Math.max(minWidth, startWidths[leftColumnIndex] + deltaX);
+        const rightNewWidth = Math.max(minWidth, startWidths[rightColumnIndex] - deltaX);
+        
+        // Only update if both columns meet minimum width
+        if (leftNewWidth >= minWidth && rightNewWidth >= minWidth) {
+            newWidths[leftColumnIndex] = leftNewWidth;
+            newWidths[rightColumnIndex] = rightNewWidth;
+            
+            // Apply new widths
+            document.documentElement.style.setProperty('--col-width-0', `${newWidths[0]}px`);
+            document.documentElement.style.setProperty('--col-width-1', `${newWidths[1]}px`);
+            document.documentElement.style.setProperty('--col-width-2', `${newWidths[2]}px`);
+        }
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            
+            if (currentResizer) {
+                currentResizer.classList.remove('resizing');
+            }
+            
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            
+            // Save column widths to localStorage
+            const columns = sortableHeader.querySelectorAll('.sortable-column');
+            const widths = Array.from(columns).map(col => col.getBoundingClientRect().width);
+            localStorage.setItem('savedAnalysesColumnWidths', JSON.stringify(widths));
+            
+            currentResizer = null;
+        }
+    });
 }
 
 async function reopenAnalysis(savedItem) {

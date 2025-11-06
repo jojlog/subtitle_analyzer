@@ -4458,6 +4458,13 @@ function setupColumnResizing() {
         const deltaX = e.clientX - startX;
         const resizerIndex = parseInt(currentResizer.getAttribute('data-column'));
         
+        // Get container width and calculate available space
+        const containerRect = sortableHeader.getBoundingClientRect();
+        const containerPadding = 32; // 16px left + 16px right
+        const resizerWidth = 15; // Each resizer column is 15px
+        const totalResizerWidth = 2 * resizerWidth; // Two resizers
+        const availableWidth = containerRect.width - containerPadding - totalResizerWidth;
+        
         // Calculate new widths
         const newWidths = [...startWidths];
         const leftColumnIndex = resizerIndex;
@@ -4467,19 +4474,82 @@ function setupColumnResizing() {
         const minWidth = 100;
         
         // Adjust left and right columns
-        const leftNewWidth = Math.max(minWidth, startWidths[leftColumnIndex] + deltaX);
-        const rightNewWidth = Math.max(minWidth, startWidths[rightColumnIndex] - deltaX);
+        let leftNewWidth = Math.max(minWidth, startWidths[leftColumnIndex] + deltaX);
+        let rightNewWidth = Math.max(minWidth, startWidths[rightColumnIndex] - deltaX);
+        
+        // If resizing the last column (resizerIndex === 1), prevent exceeding container width
+        if (resizerIndex === 1) {
+            // Calculate total width of all columns
+            const totalColumnsWidth = newWidths[0] + leftNewWidth + rightNewWidth;
+            
+            // If total exceeds available width, constrain the last column
+            if (totalColumnsWidth > availableWidth) {
+                // Constrain the right column (last column) to fit within available width
+                const maxRightWidth = availableWidth - newWidths[0] - leftNewWidth;
+                rightNewWidth = Math.max(minWidth, Math.min(rightNewWidth, maxRightWidth));
+                
+                // Recalculate left column to maintain the delta if possible
+                const adjustedLeftWidth = availableWidth - newWidths[0] - rightNewWidth;
+                if (adjustedLeftWidth >= minWidth) {
+                    leftNewWidth = adjustedLeftWidth;
+                }
+            }
+        }
         
         // Only update if both columns meet minimum width
         if (leftNewWidth >= minWidth && rightNewWidth >= minWidth) {
             newWidths[leftColumnIndex] = leftNewWidth;
             newWidths[rightColumnIndex] = rightNewWidth;
             
-            // Apply new widths
-            document.documentElement.style.setProperty('--col-width-0', `${newWidths[0]}px`);
-            document.documentElement.style.setProperty('--col-width-1', `${newWidths[1]}px`);
-            document.documentElement.style.setProperty('--col-width-2', `${newWidths[2]}px`);
+            // Verify total doesn't exceed available width
+            const totalWidth = newWidths[0] + newWidths[1] + newWidths[2];
+            if (totalWidth <= availableWidth) {
+                // Apply new widths
+                document.documentElement.style.setProperty('--col-width-0', `${newWidths[0]}px`);
+                document.documentElement.style.setProperty('--col-width-1', `${newWidths[1]}px`);
+                document.documentElement.style.setProperty('--col-width-2', `${newWidths[2]}px`);
+            }
         }
+    });
+    
+    // Update max-width constraints on window resize
+    function updateMaxWidthConstraints() {
+        const containerRect = sortableHeader.getBoundingClientRect();
+        if (containerRect.width === 0) return; // Container not visible
+        
+        const containerPadding = 32; // 16px left + 16px right
+        const resizerWidth = 15; // Each resizer column is 15px
+        const totalResizerWidth = 2 * resizerWidth; // Two resizers
+        const availableWidth = containerRect.width - containerPadding - totalResizerWidth;
+        
+        // Get current column widths
+        const columns = sortableHeader.querySelectorAll('.sortable-column');
+        const currentWidths = Array.from(columns).map(col => col.getBoundingClientRect().width);
+        const totalCurrentWidth = currentWidths.reduce((sum, w) => sum + w, 0);
+        
+        // If current total exceeds available width, scale down proportionally
+        if (totalCurrentWidth > availableWidth && availableWidth > 0) {
+            const scaleFactor = availableWidth / totalCurrentWidth;
+            const scaledWidths = currentWidths.map(w => Math.max(100, w * scaleFactor));
+            const scaledTotal = scaledWidths.reduce((sum, w) => sum + w, 0);
+            
+            // Adjust if still exceeds (due to min-width constraint)
+            if (scaledTotal > availableWidth) {
+                const adjustment = availableWidth - scaledTotal;
+                scaledWidths[2] = Math.max(100, scaledWidths[2] + adjustment); // Adjust last column
+            }
+            
+            document.documentElement.style.setProperty('--col-width-0', `${scaledWidths[0]}px`);
+            document.documentElement.style.setProperty('--col-width-1', `${scaledWidths[1]}px`);
+            document.documentElement.style.setProperty('--col-width-2', `${scaledWidths[2]}px`);
+        }
+    }
+    
+    // Listen for window resize to update constraints
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(updateMaxWidthConstraints, 100);
     });
     
     document.addEventListener('mouseup', () => {

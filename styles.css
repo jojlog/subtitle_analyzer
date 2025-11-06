@@ -1595,13 +1595,13 @@ body.theme-purple .add-to-list-btn:hover {
 
 .level-popup-global {
     position: fixed;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
+    background-color: #ff6600;
+    border: 1px solid #ff6600;
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 12px;
     font-weight: 500;
-    color: var(--text-primary);
+    color: #000;
     z-index: 10000;
     pointer-events: none;
     opacity: 0;

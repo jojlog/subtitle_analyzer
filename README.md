@@ -40,7 +40,12 @@ npm start
 
 ## Notes
 
-- The app stores API keys and analyses in localStorage
-- Analyses are saved locally and persist between sessions
-- Maximum of 50 saved analyses (oldest are removed when limit is reached)
+- Sensitive data (API keys, analyses, study sessions, theme) is stored as JSON files in the Electron `userData` directory. API keys are encrypted at rest.
+- Analyses persist between sessions; renaming enforces OS-safe filenames (no leading/trailing spaces or dots, no reserved Windows names).
+- Maximum of 50 saved analyses (oldest are removed when limit is reached).
 
+## Development
+
+- Lint: `npm run lint`
+- Format: `npm run format`
+- The renderer is being modularised; new code should prefer shared store/services in `src/`.

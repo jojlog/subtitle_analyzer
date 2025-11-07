@@ -207,8 +207,10 @@ function createWindow() {
     }
   });
 
-  // Open DevTools in development (comment out for production)
-  mainWindow.webContents.openDevTools(); // Enabled for debugging
+  // Open DevTools only in development mode
+  if (DEBUG_ENABLED || process.env.NODE_ENV === 'development') {
+    mainWindow.webContents.openDevTools();
+  }
 }
 
 app.whenReady().then(() => {

@@ -214,7 +214,19 @@
             <div id="studyModal" class="study-modal" style="display: none;">
                 <div class="study-modal-content">
                     <div class="study-header">
-                        <h3 id="studyTitle">Study Mode</h3>
+                        <div class="study-header-left">
+                            <button id="studyPrevBtn" class="study-nav-btn" title="Previous Line">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M15 18l-6-6 6-6"/>
+                                </svg>
+                            </button>
+                            <h3 id="studyTitle">Study Mode</h3>
+                            <button id="studyNextBtn" class="study-nav-btn" title="Next Line">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M9 18l6-6-6-6"/>
+                                </svg>
+                            </button>
+                        </div>
                         <div class="study-header-actions">
                             <button id="studyHistoryBtn" class="icon-btn" title="View History">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -234,6 +246,7 @@
                     <div class="study-item-display">
                         <div id="studyItemContent"></div>
                     </div>
+                    <div class="study-item-border"></div>
                     <div id="studyExpressionsSection" class="study-expressions-section" style="display: none;">
                         <h4 class="study-expressions-title">Important Expressions & Words</h4>
                         <div id="studyExpressionsContent" class="study-expressions-content"></div>

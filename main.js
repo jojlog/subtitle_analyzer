@@ -1,7 +1,7 @@
 // Load environment variables from .env file (for development)
 require('dotenv').config();
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -54,12 +54,27 @@ if (DEBUG_ENABLED) {
 
 function createWindow() {
   debugLog('debug', 'Creating main window');
+  
+  // Set icon path based on platform
+  const iconPath = process.platform === 'darwin' 
+    ? path.join(__dirname, 'build', 'icons', 'mac', 'icon.icns')
+    : path.join(__dirname, 'build', 'icons', 'png', '1024x1024.png');
+  
+  // Load icon using nativeImage for better compatibility
+  const appIcon = nativeImage.createFromPath(iconPath);
+  if (appIcon.isEmpty()) {
+    debugLog('warn', 'Failed to load icon from path', { path: iconPath });
+  } else {
+    debugLog('debug', 'Icon loaded successfully', { path: iconPath, size: appIcon.getSize() });
+  }
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     backgroundColor: '#000000',
+    icon: appIcon.isEmpty() ? iconPath : appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -215,6 +230,19 @@ function createWindow() {
 
 app.whenReady().then(() => {
   debugLog('info', 'App ready, initializing...');
+  
+  // Set Dock icon on macOS
+  if (process.platform === 'darwin' && app.dock) {
+    const dockIconPath = path.join(__dirname, 'build', 'icons', 'mac', 'icon.icns');
+    const dockIcon = nativeImage.createFromPath(dockIconPath);
+    if (!dockIcon.isEmpty()) {
+      app.dock.setIcon(dockIcon);
+      debugLog('info', 'Dock icon set', { path: dockIconPath, size: dockIcon.getSize() });
+    } else {
+      debugLog('warn', 'Failed to load Dock icon', { path: dockIconPath });
+    }
+  }
+  
   createWindow();
 
   app.on('activate', () => {

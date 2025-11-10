@@ -43,7 +43,7 @@ let currentSortColumn = 'dateEdited'; // Default sort by dateEdited
 let currentSortDirection = 'desc'; // Default descending (newest first)
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
-let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn;
+let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn, studyPrevBtn, studyNextBtn;
 let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
 
 // Study modal state
@@ -674,6 +674,8 @@ document.addEventListener('DOMContentLoaded', () => {
     closeStudyBtn = document.getElementById('closeStudyBtn');
     studyHistoryBtn = document.getElementById('studyHistoryBtn');
     saveStudyBtn = document.getElementById('saveStudyBtn');
+    studyPrevBtn = document.getElementById('studyPrevBtn');
+    studyNextBtn = document.getElementById('studyNextBtn');
     chatHistoryModal = document.getElementById('chatHistoryModal');
     chatHistoryContent = document.getElementById('chatHistoryContent');
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
@@ -732,6 +734,10 @@ document.addEventListener('DOMContentLoaded', () => {
     cleanupInactiveSavesOnStartup().catch(err => {
         console.error('Error during startup cleanup:', err);
     });
+    
+    // Clear study modal heights on startup to return to defaults
+    localStorage.removeItem('studyExpressionsHeight');
+    localStorage.removeItem('studyChatMessagesHeight');
 
     // Home button functionality
     homeBtn.addEventListener('click', () => {
@@ -4686,6 +4692,14 @@ async function reopenAnalysis(savedItem) {
         });
     }
 
+    // Navigation buttons for line-by-line study
+    if (studyPrevBtn) {
+        studyPrevBtn.addEventListener('click', navigateToPreviousLine);
+    }
+    if (studyNextBtn) {
+        studyNextBtn.addEventListener('click', navigateToNextLine);
+    }
+
     // Close modal when clicking outside
     studyModal.addEventListener('click', (e) => {
         if (e.target === studyModal) {
@@ -4721,8 +4735,97 @@ function setupTranslationAccordions() {
             const accordion = document.querySelector(`.translation-accordion[data-type="${type}"]`);
             if (!accordion) return;
             
+            const studyExpressionsSection = document.getElementById('studyExpressionsSection');
+            const studyItemDisplay = document.querySelector('.study-item-display');
+            const resizer = document.querySelector('.study-resizer[data-resizer="expressions-chat"]');
+            const studyChatMessages = document.getElementById('studyChatMessages');
+            
+            if (!studyExpressionsSection || !studyItemDisplay || !resizer) return;
+            
             const isExpanded = accordion.classList.contains('expanded');
             
+            // Store current divider position (top of resizer in viewport) - this must never change except during manual drag
+            const currentDividerTop = resizer.getBoundingClientRect().top;
+            
+            // Store current expressions section height
+            const currentExpressionsHeight = studyExpressionsSection.getBoundingClientRect().height;
+            
+            // Store current chat messages height if it has a fixed height
+            const currentChatMessagesHeight = studyChatMessages ? studyChatMessages.getBoundingClientRect().height : null;
+            
+            // Temporarily disable transitions to measure actual study-item-display height change
+            const accordionTransition = accordion.style.transition;
+            const expressionsTransition = studyExpressionsSection.style.transition;
+            const chatMessagesTransition = studyChatMessages ? studyChatMessages.style.transition : '';
+            accordion.style.transition = 'none';
+            studyExpressionsSection.style.transition = 'none';
+            if (studyChatMessages) {
+                studyChatMessages.style.transition = 'none';
+            }
+            
+            // Measure current study-item-display height (this includes the accordion)
+            const currentItemDisplayHeight = studyItemDisplay.getBoundingClientRect().height;
+            
+            // Toggle accordion state to measure new height
+            if (isExpanded) {
+                accordion.classList.remove('expanded');
+                button.classList.remove('expanded');
+            } else {
+                accordion.classList.add('expanded');
+                button.classList.add('expanded');
+            }
+            
+            // Force reflow to get new height
+            void studyItemDisplay.offsetHeight;
+            
+            // Measure new study-item-display height
+            const newItemDisplayHeight = studyItemDisplay.getBoundingClientRect().height;
+            
+            // Calculate actual study-item-display height change (round to ensure pixel-perfect precision)
+            const itemDisplayHeightChange = Math.round(newItemDisplayHeight - currentItemDisplayHeight);
+            
+            // Restore accordion to original state
+            if (isExpanded) {
+                accordion.classList.add('expanded');
+                button.classList.add('expanded');
+            } else {
+                accordion.classList.remove('expanded');
+                button.classList.remove('expanded');
+            }
+            
+            // Restore transitions
+            accordion.style.transition = accordionTransition;
+            studyExpressionsSection.style.transition = expressionsTransition;
+            if (studyChatMessages) {
+                studyChatMessages.style.transition = chatMessagesTransition || 'height 0.3s ease';
+            }
+            
+            // To keep divider at fixed position, expressions section must shrink/grow by exactly the study-item-display height change
+            // Use Math.round to ensure pixel-perfect calculations
+            const minExpressionsHeight = 100;
+            const newExpressionsHeight = Math.max(
+                minExpressionsHeight,
+                Math.round(currentExpressionsHeight - itemDisplayHeightChange)
+            );
+            
+            // Apply both changes synchronously in the same block to ensure perfect synchronization
+            // Set expressions height first
+            studyExpressionsSection.style.height = `${newExpressionsHeight}px`;
+            
+            // If chat messages has a fixed height, adjust it to maintain divider position
+            // When expressions section shrinks by X, chat messages should grow by X (if it has fixed height)
+            if (studyChatMessages && currentChatMessagesHeight !== null) {
+                const chatMessagesHeightStyle = studyChatMessages.style.height;
+                if (chatMessagesHeightStyle && chatMessagesHeightStyle !== 'auto') {
+                    const currentChatHeight = parseFloat(chatMessagesHeightStyle) || currentChatMessagesHeight;
+                    const newChatMessagesHeight = Math.max(50, Math.round(currentChatHeight + itemDisplayHeightChange));
+                    studyChatMessages.style.height = `${newChatMessagesHeight}px`;
+                    studyChatMessages.style.flex = '0 0 auto'; // Prevent flex from overriding height
+                }
+            }
+            
+            // Immediately toggle accordion state in the same synchronous block
+            // Both will animate together with same timing (0.3s ease)
             if (isExpanded) {
                 accordion.classList.remove('expanded');
                 button.classList.remove('expanded');
@@ -4732,8 +4835,30 @@ function setupTranslationAccordions() {
             }
 
             lockStudyResizerTemporarily();
+            
+            // Save height to localStorage after animation completes
+            accordion.addEventListener('transitionend', () => {
+                localStorage.setItem('studyExpressionsHeight', newExpressionsHeight);
+                updateStudyItemBorder();
+            }, { once: true });
+            
+            // Also update immediately for instant feedback
+            requestAnimationFrame(() => {
+                updateStudyItemBorder();
+            });
         });
     });
+}
+
+// Update border position based on study-item-display content
+function updateStudyItemBorder() {
+    const studyItemDisplay = document.querySelector('.study-item-display');
+    const border = document.querySelector('.study-item-border');
+    if (studyItemDisplay && border) {
+        // Border is already positioned correctly in flex layout,
+        // but we ensure it's visible and properly styled
+        // The flex layout will automatically position it after study-item-display
+    }
 }
 
 function lockStudyResizerTemporarily(duration = STUDY_RESIZER_LOCK_MS) {
@@ -4805,7 +4930,7 @@ function setupStudyModalResizers() {
         
         // Only handle expressions-chat resizer
         if (resizerType === 'expressions-chat' && studyExpressionsSection && studyChatMessages) {
-            const minMessagesHeight = 100;
+            const minMessagesHeight = 50;
             const minExpressionsHeight = 100;
             
             // Calculate new messages height
@@ -4835,6 +4960,7 @@ function setupStudyModalResizers() {
             
             studyExpressionsSection.style.height = `${newExpressionsHeight}px`;
             studyChatMessages.style.height = `${constrainedMessagesHeight}px`;
+            studyChatMessages.style.flex = '0 0 auto'; // Prevent flex from overriding height
             
             // Save to localStorage
             localStorage.setItem('studyExpressionsHeight', newExpressionsHeight);
@@ -4859,15 +4985,44 @@ function setupStudyModalResizers() {
 function restoreStudyModalHeights() {
     const studyExpressionsSection = document.getElementById('studyExpressionsSection');
     const studyChatMessages = document.getElementById('studyChatMessages');
-    
-    if (studyExpressionsSection) {
-        const savedHeight = localStorage.getItem('studyExpressionsHeight');
-        studyExpressionsSection.style.height = savedHeight ? savedHeight + 'px' : '200px';
-    }
+    const studyModalContent = document.querySelector('.study-modal-content');
     
     if (studyChatMessages) {
         const savedHeight = localStorage.getItem('studyChatMessagesHeight');
-        studyChatMessages.style.height = savedHeight ? savedHeight + 'px' : '200px';
+        if (savedHeight) {
+            studyChatMessages.style.height = savedHeight + 'px';
+            studyChatMessages.style.flex = '0 0 auto'; // Prevent flex from overriding height
+        } else {
+            // Set chat messages area to minimum height (5% of modal height) by default
+            if (studyModalContent) {
+                const modalHeight = studyModalContent.getBoundingClientRect().height;
+                const defaultHeight = Math.round(modalHeight * 0.05);
+                studyChatMessages.style.height = `${Math.max(50, defaultHeight)}px`;
+                studyChatMessages.style.flex = '0 0 auto'; // Prevent flex from overriding height
+            } else {
+                studyChatMessages.style.height = '5%';
+                studyChatMessages.style.flex = '0 0 auto'; // Prevent flex from overriding height
+            }
+        }
+    }
+    
+    if (studyExpressionsSection) {
+        const savedHeight = localStorage.getItem('studyExpressionsHeight');
+        if (savedHeight) {
+            studyExpressionsSection.style.height = savedHeight + 'px';
+        } else {
+            // Calculate remaining space for expressions section
+            if (studyModalContent && studyChatMessages) {
+                const modalHeight = studyModalContent.getBoundingClientRect().height;
+                const chatMessagesHeight = studyChatMessages.getBoundingClientRect().height;
+                // Estimate other fixed sections (header, timestamp, item display, border, resizer, input container)
+                const fixedSectionsHeight = 250; // Approximate height of fixed sections including input
+                const availableHeight = modalHeight - fixedSectionsHeight - chatMessagesHeight;
+                studyExpressionsSection.style.height = `${Math.max(100, availableHeight)}px`;
+            } else {
+                studyExpressionsSection.style.height = 'auto';
+            }
+        }
     }
 }
 
@@ -4934,9 +5089,6 @@ async function openStudyModal(type, item, index, timestamp = null) {
     currentStudyItem = { type, item, index, timestamp };
     currentStudyChatHistory = [];
     
-    // Restore saved section heights
-    restoreStudyModalHeights();
-    
     // Ensure chat container is visible
     const studyChatContainer = document.querySelector('.study-chat-container');
     if (studyChatContainer) {
@@ -4996,6 +5148,11 @@ async function openStudyModal(type, item, index, timestamp = null) {
         
         // Setup accordion functionality
         setupTranslationAccordions();
+        
+        // Update border position after content is set
+        requestAnimationFrame(() => {
+            updateStudyItemBorder();
+        });
         
         // Display related expressions using displayStudyExpressions() for consistency
         displayStudyExpressions();
@@ -5094,12 +5251,94 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
     // Show modal
     studyModal.style.display = 'flex';
     
+    // Restore saved section heights after modal is visible
+    // Use requestAnimationFrame to ensure modal is rendered before calculating heights
+    requestAnimationFrame(() => {
+        restoreStudyModalHeights();
+    });
+    
+    // Update navigation button states
+    updateNavigationButtons();
+    
     // Load saved study session if exists (expressions will be restored, but chat stays empty)
     await loadStudySession();
     
     // Ensure chat area remains empty after loading (history is available via Chat history button only)
     studyChatMessages.innerHTML = '';
     studyChatInput.value = '';
+}
+
+// Navigate to previous line in line-by-line study
+function navigateToPreviousLine() {
+    if (!currentStudyItem || currentStudyItem.type !== 'translation' || !state.currentAnalysis) {
+        return;
+    }
+    
+    const currentIndex = currentStudyItem.index;
+    if (currentIndex <= 0) {
+        return; // Already at first line
+    }
+    
+    const previousIndex = currentIndex - 1;
+    const previousTranslation = state.currentAnalysis.translations[previousIndex];
+    if (!previousTranslation) {
+        return;
+    }
+    
+    // Find timestamp for previous translation
+    const timestamp = findTimestampForText(previousTranslation.swedish);
+    
+    // Open study modal with previous line
+    openStudyModal('translation', previousTranslation, previousIndex, timestamp);
+}
+
+// Navigate to next line in line-by-line study
+function navigateToNextLine() {
+    if (!currentStudyItem || currentStudyItem.type !== 'translation' || !state.currentAnalysis) {
+        return;
+    }
+    
+    const currentIndex = currentStudyItem.index;
+    const translations = state.currentAnalysis.translations || [];
+    if (currentIndex >= translations.length - 1) {
+        return; // Already at last line
+    }
+    
+    const nextIndex = currentIndex + 1;
+    const nextTranslation = translations[nextIndex];
+    if (!nextTranslation) {
+        return;
+    }
+    
+    // Find timestamp for next translation
+    const timestamp = findTimestampForText(nextTranslation.swedish);
+    
+    // Open study modal with next line
+    openStudyModal('translation', nextTranslation, nextIndex, timestamp);
+}
+
+// Update navigation button states (enable/disable based on position)
+function updateNavigationButtons() {
+    if (!studyPrevBtn || !studyNextBtn) {
+        return;
+    }
+    
+    // Only enable navigation for translation type (line-by-line study)
+    if (!currentStudyItem || currentStudyItem.type !== 'translation' || !state.currentAnalysis) {
+        studyPrevBtn.disabled = true;
+        studyNextBtn.disabled = true;
+        return;
+    }
+    
+    const currentIndex = currentStudyItem.index;
+    const translations = state.currentAnalysis.translations || [];
+    const totalLines = translations.length;
+    
+    // Disable previous button if at first line
+    studyPrevBtn.disabled = currentIndex <= 0;
+    
+    // Disable next button if at last line
+    studyNextBtn.disabled = currentIndex >= totalLines - 1;
 }
 
 // Save study session (expressions and chat history)

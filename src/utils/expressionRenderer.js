@@ -82,16 +82,16 @@ export function renderExpressions(container, expressions, options = {}) {
             }
             html += `</div></div>`;
         } else {
-            // Study mode: word + meaning + example
-            html = `<div class="study-expression-header">`;
+            // Study mode: word + meaning + example (horizontal layout)
+            html = `<div class="study-expression-content">`;
             html += `<span class="study-expression-word">${escapeHtml(fixEncoding(expr.word))}</span>`;
-            html += `</div>`;
             if (expr.meaning) {
-                html += `<div class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</div>`;
+                html += `<span class="study-expression-meaning">${escapeHtml(fixEncoding(expr.meaning))}</span>`;
             }
             if (expr.example) {
-                html += `<div class="study-expression-example">Example: ${escapeHtml(fixEncoding(expr.example))}</div>`;
+                html += `<span class="study-expression-example">${escapeHtml(fixEncoding(expr.example))}</span>`;
             }
+            html += `</div>`;
         }
 
         item.innerHTML = html;

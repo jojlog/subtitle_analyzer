@@ -1421,8 +1421,8 @@ body.theme-purple .add-to-list-btn:hover {
 }
 
 .study-modal-content {
-    width: 90%;
-    max-width: 90vw;
+    width: 80%;
+    max-width: 80vw;
     min-width: 600px;
     height: 90%;
     max-height: 90vh;
@@ -1449,7 +1449,7 @@ body.theme-purple .add-to-list-btn:hover {
     border: 2px solid #999;
     color: #999;
     cursor: pointer;
-    padding: 8px;
+    padding: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1459,16 +1459,16 @@ body.theme-purple .add-to-list-btn:hover {
     top: 50%;
     transform: translateY(-50%);
     z-index: 1001;
-    width: 56px;
-    height: 56px;
+    width: 40px;
+    height: 40px;
 }
 
 .study-nav-btn-left {
-    left: 20px;
+    left: calc(5% - 20px);
 }
 
 .study-nav-btn-right {
-    right: 20px;
+    right: calc(5% - 20px);
 }
 
 .study-nav-btn:hover:not(:disabled) {
@@ -2154,3 +2154,4 @@ body.theme-purple .add-to-list-btn:hover {
 .expression-item:hover {
     background-color: #111;
 }
+

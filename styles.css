@@ -1444,34 +1444,43 @@ body.theme-purple .add-to-list-btn:hover {
     border-bottom: 1px solid #333;
 }
 
-.study-header-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex: 1;
-}
-
 .study-nav-btn {
-    background: transparent;
-    border: none;
-    color: #ff6600;
+    background: rgba(0, 0, 0, 0.7);
+    border: 2px solid #999;
+    color: #999;
     cursor: pointer;
     padding: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: 50%;
     transition: all 0.2s ease;
-    flex-shrink: 0;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1001;
+    width: 56px;
+    height: 56px;
+}
+
+.study-nav-btn-left {
+    left: 20px;
+}
+
+.study-nav-btn-right {
+    right: 20px;
 }
 
 .study-nav-btn:hover:not(:disabled) {
-    background-color: rgba(255, 102, 0, 0.1);
-    color: #ff8833;
+    background-color: rgba(255, 102, 0, 0.2);
+    border-color: #ff6600;
+    color: #ff6600;
+    transform: translateY(-50%) scale(1.1);
 }
 
 .study-nav-btn:disabled {
     color: #666;
+    border-color: #666;
     cursor: not-allowed;
     opacity: 0.5;
 }

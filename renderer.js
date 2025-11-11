@@ -43,10 +43,12 @@ let listViewBtn, cardViewBtn;
 let savedViewMode = 'list'; // 'list' or 'card'
 let currentSortColumn = 'dateEdited'; // Default sort by dateEdited
 let currentSortDirection = 'desc'; // Default descending (newest first)
+let currentFolderFilter = null; // Currently selected folder ID, null = show all
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
 let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn, studyPrevBtn, studyNextBtn;
 let chatHistoryModal, chatHistoryContent, closeHistoryBtn;
+let folderBreadcrumb, contextMenu;
 
 // Study modal state
 let currentStudyItem = null;
@@ -149,6 +151,356 @@ async function fetchSavedAnalyses(context = '') {
         return [];
     }
     return result.data || [];
+}
+
+// Folder management functions
+async function createFolder(folderName) {
+    if (!folderName || !folderName.trim()) {
+        return { success: false, error: 'Folder name cannot be empty' };
+    }
+    
+    const trimmedName = folderName.trim();
+    const saved = await fetchSavedAnalyses('create-folder');
+    
+    // Check for duplicate folder name
+    const duplicate = saved.find(item => item.type === 'folder' && item.folderName === trimmedName);
+    if (duplicate) {
+        return { success: false, error: 'Folder with this name already exists' };
+    }
+    
+    const now = new Date().toISOString();
+    const newFolder = {
+        id: generateUniqueId(),
+        type: 'folder',
+        folderName: trimmedName,
+        dateCreated: now,
+        dateEdited: now
+    };
+    
+    // Immediately add folder to UI (optimistic update)
+    if (currentFolderFilter === null) {
+        addFolderToUI(newFolder);
+    }
+    
+    // Save in background
+    saved.push(newFolder);
+    const result = await saveAnalysesSafe(saved);
+    
+    if (result.success) {
+        debugLog('✅ FOLDER CREATED', { folderId: newFolder.id, folderName: trimmedName }, 'success');
+    } else {
+        // If save failed, remove from UI
+        removeFolderFromUI(newFolder.id);
+        return { success: false, error: 'Failed to save folder' };
+    }
+    
+    return result;
+}
+
+// Helper function to add folder to UI immediately
+function addFolderToUI(folder) {
+    if (savedViewMode === 'list' && activeSavesList) {
+        // Add to list view
+        const folderItem = document.createElement('div');
+        folderItem.className = 'saved-item saved-item-folder';
+        folderItem.setAttribute('data-item-id', String(folder.id));
+        folderItem.setAttribute('data-folder-id', String(folder.id));
+        folderItem.setAttribute('draggable', 'false');
+        
+        folderItem.innerHTML = `
+            <div class="saved-item-content-wrapper">
+                <div class="saved-item-content">
+                    <div class="saved-item-top-row">
+                        <svg class="folder-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span class="saved-item-name folder-name">${escapeHtml(folder.folderName)}</span>
+                        <span class="saved-item-date-edited"></span>
+                        <span class="saved-item-date-created"></span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add event handlers
+        folderItem.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!isEditMode) {
+                currentFolderFilter = folder.id;
+                await loadSavedAnalyses();
+            }
+        });
+        
+        folderItem.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e, folder);
+        });
+        
+        folderItem.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            folderItem.classList.add('drag-over');
+        });
+        
+        folderItem.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            folderItem.classList.remove('drag-over');
+        });
+        
+        folderItem.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            folderItem.classList.remove('drag-over');
+            
+            const fileId = e.dataTransfer.getData('text/plain');
+            if (fileId) {
+                await assignFileToFolder(fileId, folder.id);
+            }
+        });
+        
+        // Insert in sorted position (folders should be sorted alphabetically)
+        const existingFolders = Array.from(activeSavesList.querySelectorAll('.saved-item-folder'));
+        let insertBefore = null;
+        
+        for (const existingFolder of existingFolders) {
+            const existingName = existingFolder.querySelector('.folder-name')?.textContent || '';
+            if (folder.folderName.localeCompare(existingName) < 0) {
+                insertBefore = existingFolder;
+                break;
+            }
+        }
+        
+        if (insertBefore) {
+            activeSavesList.insertBefore(folderItem, insertBefore);
+        } else {
+            // Insert after all folders, before first file
+            const firstFile = activeSavesList.querySelector('.saved-item-active:not(.saved-item-folder)');
+            if (firstFile) {
+                activeSavesList.insertBefore(folderItem, firstFile);
+            } else {
+                activeSavesList.appendChild(folderItem);
+            }
+        }
+    } else if (savedViewMode === 'card' && activeSavesCards) {
+        // Add to card view
+        (async () => {
+            const folderCard = document.createElement('div');
+            folderCard.className = 'saved-card saved-card-folder';
+            folderCard.setAttribute('data-item-id', String(folder.id));
+            folderCard.setAttribute('data-folder-id', String(folder.id));
+            folderCard.setAttribute('draggable', 'false');
+            
+            folderCard.innerHTML = `
+                <div class="saved-card-folder-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div class="saved-card-content">
+                    <div class="saved-card-header">
+                        <div class="saved-card-name folder-name">${escapeHtml(folder.folderName)}</div>
+                    </div>
+                </div>
+            `;
+            
+            // Add event handlers
+            folderCard.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!isEditMode) {
+                    currentFolderFilter = folder.id;
+                    await loadSavedAnalyses();
+                }
+            });
+            
+            folderCard.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showContextMenu(e, folder);
+            });
+            
+            folderCard.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                folderCard.classList.add('drag-over');
+            });
+            
+            folderCard.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderCard.classList.remove('drag-over');
+            });
+            
+            folderCard.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderCard.classList.remove('drag-over');
+                
+                const fileId = e.dataTransfer.getData('text/plain');
+                if (fileId) {
+                    await assignFileToFolder(fileId, folder.id);
+                }
+            });
+            
+            // Insert in sorted position (folders should be sorted alphabetically)
+            const existingFolders = Array.from(activeSavesCards.querySelectorAll('.saved-card-folder'));
+            let insertBefore = null;
+            
+            for (const existingFolder of existingFolders) {
+                const existingName = existingFolder.querySelector('.folder-name')?.textContent || '';
+                if (folder.folderName.localeCompare(existingName) < 0) {
+                    insertBefore = existingFolder;
+                    break;
+                }
+            }
+            
+            if (insertBefore) {
+                activeSavesCards.insertBefore(folderCard, insertBefore);
+            } else {
+                // Insert after all folders, before first file card
+                const firstFileCard = activeSavesCards.querySelector('.saved-card:not(.saved-card-folder)');
+                if (firstFileCard) {
+                    activeSavesCards.insertBefore(folderCard, firstFileCard);
+                } else {
+                    activeSavesCards.appendChild(folderCard);
+                }
+            }
+        })();
+    }
+}
+
+// Helper function to remove folder from UI (if save failed)
+function removeFolderFromUI(folderId) {
+    const folderItem = document.querySelector(`[data-folder-id="${folderId}"]`);
+    if (folderItem) {
+        folderItem.remove();
+    }
+}
+
+async function renameFolder(folderId, newName) {
+    if (!newName || !newName.trim()) {
+        return { success: false, error: 'Folder name cannot be empty' };
+    }
+    
+    const trimmedName = newName.trim();
+    const saved = await fetchSavedAnalyses('rename-folder');
+    
+    const folderIndex = saved.findIndex(item => item.type === 'folder' && item.id === folderId);
+    if (folderIndex === -1) {
+        return { success: false, error: 'Folder not found' };
+    }
+    
+    // Check for duplicate folder name (excluding current folder)
+    const duplicate = saved.find(item => 
+        item.type === 'folder' && 
+        item.id !== folderId && 
+        item.folderName === trimmedName
+    );
+    if (duplicate) {
+        return { success: false, error: 'Folder with this name already exists' };
+    }
+    
+    saved[folderIndex].folderName = trimmedName;
+    saved[folderIndex].dateEdited = new Date().toISOString();
+    
+    const result = await saveAnalysesSafe(saved);
+    
+    if (result.success) {
+        debugLog('✅ FOLDER RENAMED', { folderId, newName: trimmedName }, 'success');
+        await loadSavedAnalyses();
+    }
+    
+    return result;
+}
+
+async function deleteFolder(folderId, deleteFiles = false) {
+    const saved = await fetchSavedAnalyses('delete-folder');
+    
+    const folderIndex = saved.findIndex(item => item.type === 'folder' && item.id === folderId);
+    if (folderIndex === -1) {
+        return { success: false, error: 'Folder not found' };
+    }
+    
+    // Get files in this folder
+    const filesInFolder = saved.filter(item => 
+        item.type !== 'folder' && item.folderId === folderId
+    );
+    
+    if (deleteFiles) {
+        // Delete folder and all files in it
+        const fileIds = new Set(filesInFolder.map(f => f.id));
+        const filtered = saved.filter(item => 
+            item.id !== folderId && !fileIds.has(item.id)
+        );
+        const result = await saveAnalysesSafe(filtered);
+        
+        if (result.success) {
+            debugLog('✅ FOLDER AND FILES DELETED', { 
+                folderId, 
+                deletedFiles: filesInFolder.length 
+            }, 'success');
+            await loadSavedAnalyses();
+        }
+        return result;
+    } else {
+        // Remove folder, move files out (set folderId to null)
+        saved.forEach(item => {
+            if (item.type !== 'folder' && item.folderId === folderId) {
+                item.folderId = null;
+            }
+        });
+        
+        // Remove folder
+        saved.splice(folderIndex, 1);
+        const result = await saveAnalysesSafe(saved);
+        
+        if (result.success) {
+            debugLog('✅ FOLDER DELETED, FILES MOVED OUT', { 
+                folderId, 
+                movedFiles: filesInFolder.length 
+            }, 'success');
+            await loadSavedAnalyses();
+        }
+        return result;
+    }
+}
+
+async function assignFileToFolder(fileId, folderId) {
+    const saved = await fetchSavedAnalyses('assign-file-to-folder');
+    
+    const fileIndex = saved.findIndex(item => 
+        item.type !== 'folder' && item.id === fileId
+    );
+    if (fileIndex === -1) {
+        return { success: false, error: 'File not found' };
+    }
+    
+    // Verify folder exists if folderId is not null
+    if (folderId !== null) {
+        const folderExists = saved.some(item => 
+            item.type === 'folder' && item.id === folderId
+        );
+        if (!folderExists) {
+            return { success: false, error: 'Folder not found' };
+        }
+    }
+    
+    saved[fileIndex].folderId = folderId;
+    const result = await saveAnalysesSafe(saved);
+    
+    if (result.success) {
+        debugLog('✅ FILE ASSIGNED TO FOLDER', { fileId, folderId }, 'success');
+        await loadSavedAnalyses();
+    }
+    
+    return result;
+}
+
+async function removeFileFromFolder(fileId) {
+    return await assignFileToFolder(fileId, null);
 }
 
 async function loadStudySessionsSafe() {
@@ -691,6 +1043,8 @@ document.addEventListener('DOMContentLoaded', () => {
     chatHistoryContent = document.getElementById('chatHistoryContent');
     closeHistoryBtn = document.getElementById('closeHistoryBtn');
     themeSelect = document.getElementById('themeSelect');
+    folderBreadcrumb = document.getElementById('folderBreadcrumb');
+    contextMenu = document.getElementById('contextMenu');
     
     // Modal elements
     const renameModal = document.getElementById('renameModal');
@@ -3616,6 +3970,20 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Also set onclick as backup
         savedAnalysesBtn.onclick = handleSavedAnalysesClick;
         
+        // Right-click on empty space in saved analyses view to create folder
+        if (activeSavesSection) {
+            activeSavesSection.addEventListener('contextmenu', async (e) => {
+                // Only if clicking on the section itself, not on items
+                if (e.target === activeSavesSection || 
+                    e.target === activeSavesList || 
+                    e.target === activeSavesCards) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await showCreateFolderModal();
+                }
+            });
+        }
+        
         console.log('✅ Click handler attached to savedAnalysesBtn');
     }
 
@@ -3847,6 +4215,8 @@ async function loadSavedAnalyses() {
     // Migrate date fields: convert old `date` field to `dateCreated` and `dateEdited` if needed
     let needsDateMigration = false;
     let migratedCount = 0;
+    let needsFolderMigration = false;
+    let folderMigratedCount = 0;
     saved = saved.map(item => {
         // If item has old `date` field but no `dateCreated` or `dateEdited`, migrate it
         if (item.date && (!item.dateCreated || !item.dateEdited)) {
@@ -3882,6 +4252,15 @@ async function loadSavedAnalyses() {
             });
             return migratedItem;
         }
+        // Migrate folderId: add folderId: null to items without it (non-folder items only)
+        if (item.type !== 'folder' && item.folderId === undefined) {
+            needsFolderMigration = true;
+            folderMigratedCount++;
+            return {
+                ...item,
+                folderId: null
+            };
+        }
         return item;
     });
     
@@ -3913,6 +4292,13 @@ async function loadSavedAnalyses() {
         });
     }
 
+    if (needsFolderMigration) {
+        debugLog('🔄 FOLDER MIGRATION COMPLETED', {
+            migratedItems: folderMigratedCount,
+            totalItems: saved.length
+        });
+    }
+
     if (needsCleanup) {
         debugLog('🧹 SAVED ANALYSES CLEANUP COMPLETED', {
             cleanedItems: cleanedCount,
@@ -3921,11 +4307,12 @@ async function loadSavedAnalyses() {
     }
 
     // Save migrated/cleaned data back to storage if needed
-    if (needsDateMigration || needsCleanup) {
+    if (needsDateMigration || needsFolderMigration || needsCleanup) {
         try {
             await saveAnalysesSafe(saved);
             debugLog('💾 MIGRATED/CLEANED DATA SAVED', { 
                 migratedItems: migratedCount,
+                folderMigratedItems: folderMigratedCount,
                 cleanedItems: cleanedCount 
             }, 'success');
         } catch (error) {
@@ -3945,9 +4332,12 @@ async function loadSavedAnalyses() {
         return;
     }
 
-    // Separate inactive (processing) items from active (completed) items
+    // Separate folders, inactive (processing) items, and active (completed) items
+    const folders = saved.filter(item => item.type === 'folder');
     const inactiveItems = saved.filter(item => item.status === 'processing');
     const activeItems = saved.filter(item => {
+        // Skip folders
+        if (item.type === 'folder') return false;
         // Must have analysis data to be considered completed
         if (!item.analysis) return false;
         // Must not have processing status
@@ -3956,6 +4346,12 @@ async function loadSavedAnalyses() {
         if (!item.fileName) return false;
         return true;
     });
+    
+    // Apply folder filter if active
+    let filteredActive = activeItems;
+    if (currentFolderFilter !== null) {
+        filteredActive = activeItems.filter(item => item.folderId === currentFolderFilter);
+    }
     
     // Helper function to get date for sorting/comparison (prioritize dateEdited, fallback to dateCreated, then date)
     const getDateForItem = (item) => {
@@ -3986,7 +4382,33 @@ async function loadSavedAnalyses() {
     });
     
     // Convert active items map to array (will be sorted by sortActiveSaves function)
-    const filteredActive = Array.from(fileMap.values());
+    // Note: filteredActive is already set above if folder filter is active
+    if (currentFolderFilter === null) {
+        filteredActive = Array.from(fileMap.values());
+    } else {
+        // Re-apply deduplication to filtered items
+        const filteredMap = new Map();
+        filteredActive.forEach(item => {
+            const fileName = item.fileName;
+            if (!fileName) return;
+            
+            const itemDate = new Date(getDateForItem(item));
+            
+            if (!filteredMap.has(fileName)) {
+                filteredMap.set(fileName, item);
+            } else {
+                const existing = filteredMap.get(fileName);
+                const existingDate = new Date(getDateForItem(existing));
+                
+                if (!existing.analysis && item.analysis) {
+                    filteredMap.set(fileName, item);
+                } else if (itemDate > existingDate && item.analysis) {
+                    filteredMap.set(fileName, item);
+                }
+            }
+        });
+        filteredActive = Array.from(filteredMap.values());
+    }
     
     // Sort inactive items by date (newest first)
     const sortedInactive = inactiveItems.sort((a, b) => {
@@ -3996,23 +4418,28 @@ async function loadSavedAnalyses() {
     // Render inactive saves
     renderInactiveSaves(sortedInactive);
     
+    // Render folder breadcrumb
+    renderFolderBreadcrumb();
+    
     // Show/hide header and render active saves
     debugLog('📊 ACTIVE SAVES FILTERING', {
         totalSaved: saved.length,
+        foldersCount: folders.length,
         inactiveCount: inactiveItems.length,
         activeBeforeDedup: activeItems.length,
         activeAfterDedup: filteredActive.length,
-        activeWithAnalysis: activeItems.filter(i => i.analysis).length
+        activeWithAnalysis: activeItems.filter(i => i.analysis).length,
+        currentFolderFilter: currentFolderFilter
     });
     
-    if (filteredActive.length > 0) {
+    if (filteredActive.length > 0 || folders.length > 0) {
         if (activeSavesHeader) activeSavesHeader.style.display = savedViewMode === 'list' ? 'block' : 'none';
         // Update view display before rendering
         updateViewToggleButtons();
         if (savedViewMode === 'card') {
-            await renderActiveSavesAsCards(filteredActive);
+            await renderActiveSavesAsCards(filteredActive, folders);
         } else {
-            renderActiveSaves(filteredActive);
+            renderActiveSaves(filteredActive, folders);
         }
     } else {
         if (activeSavesHeader) activeSavesHeader.style.display = 'none';
@@ -4041,6 +4468,52 @@ async function loadSavedAnalyses() {
     updateViewToggleButtons();
     
     return; // Exit early - rendering is done in separate functions
+}
+
+// Helper function to render folder breadcrumb
+function renderFolderBreadcrumb() {
+    if (!folderBreadcrumb) return;
+    
+    if (currentFolderFilter === null) {
+        folderBreadcrumb.style.display = 'none';
+        return;
+    }
+    
+    // Get folder name
+    (async () => {
+        const saved = await fetchSavedAnalyses('breadcrumb');
+        const folder = saved.find(item => item.type === 'folder' && item.id === currentFolderFilter);
+        
+        if (!folder) {
+            // Folder not found, reset filter
+            currentFolderFilter = null;
+            folderBreadcrumb.style.display = 'none';
+            await loadSavedAnalyses();
+            return;
+        }
+        
+        folderBreadcrumb.style.display = 'flex';
+        folderBreadcrumb.innerHTML = `
+            <button class="folder-breadcrumb-back" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+                <span>All Files</span>
+            </button>
+            <span class="folder-breadcrumb-separator">/</span>
+            <span class="folder-breadcrumb-folder">${escapeHtml(folder.folderName)}</span>
+        `;
+        
+        // Add back button handler
+        const backBtn = folderBreadcrumb.querySelector('.folder-breadcrumb-back');
+        if (backBtn) {
+            backBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                currentFolderFilter = null;
+                await loadSavedAnalyses();
+            });
+        }
+    })();
 }
 
 // Helper function to render inactive saves (processing/paused/queued)
@@ -4104,10 +4577,83 @@ function renderInactiveSaves(inactiveItems) {
 }
 
 // Helper function to render active saves (completed)
-function renderActiveSaves(activeItems) {
+function renderActiveSaves(activeItems, folders = []) {
     if (!activeSavesList) return;
     
     activeSavesList.innerHTML = '';
+    
+    // Render folders first (only if not filtering by folder)
+    if (currentFolderFilter === null) {
+        const sortedFolders = [...folders].sort((a, b) => {
+            return a.folderName.localeCompare(b.folderName);
+        });
+        
+        sortedFolders.forEach(folder => {
+            const folderItem = document.createElement('div');
+            folderItem.className = 'saved-item saved-item-folder';
+            folderItem.setAttribute('data-item-id', String(folder.id));
+            folderItem.setAttribute('data-folder-id', String(folder.id));
+            folderItem.setAttribute('draggable', 'false');
+            
+            folderItem.innerHTML = `
+                <div class="saved-item-content-wrapper">
+                    <div class="saved-item-content">
+                        <div class="saved-item-top-row">
+                            <svg class="folder-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                            <span class="saved-item-name folder-name">${escapeHtml(folder.folderName)}</span>
+                            <span class="saved-item-date-edited"></span>
+                            <span class="saved-item-date-created"></span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add click handler to filter by folder
+            folderItem.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!isEditMode) {
+                    currentFolderFilter = folder.id;
+                    await loadSavedAnalyses();
+                }
+            });
+            
+            // Add right-click handler for context menu
+            folderItem.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showContextMenu(e, folder);
+            });
+            
+            // Add drag-and-drop handlers for folders (drop targets)
+            folderItem.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                folderItem.classList.add('drag-over');
+            });
+            
+            folderItem.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderItem.classList.remove('drag-over');
+            });
+            
+            folderItem.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderItem.classList.remove('drag-over');
+                
+                const fileId = e.dataTransfer.getData('text/plain');
+                if (fileId) {
+                    await assignFileToFolder(fileId, folder.id);
+                }
+            });
+            
+            activeSavesList.appendChild(folderItem);
+        });
+    }
     
     // Sort active items based on current sort settings
     const sorted = sortActiveSaves(activeItems);
@@ -4130,6 +4676,7 @@ function renderActiveSaves(activeItems) {
         const savedItem = document.createElement('div');
         savedItem.className = 'saved-item saved-item-active';
         savedItem.setAttribute('data-item-id', String(item.id));
+        savedItem.setAttribute('draggable', 'true');
         
         // Format dates
         const dateEdited = item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
@@ -4209,6 +4756,28 @@ function renderActiveSaves(activeItems) {
                 }
             });
         }
+        
+        // Add drag-and-drop handlers
+        savedItem.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', item.id);
+            e.dataTransfer.effectAllowed = 'move';
+            savedItem.classList.add('dragging');
+        });
+        
+        savedItem.addEventListener('dragend', (e) => {
+            savedItem.classList.remove('dragging');
+            // Remove drag-over class from all folders
+            document.querySelectorAll('.saved-item-folder').forEach(f => {
+                f.classList.remove('drag-over');
+            });
+        });
+        
+        // Add right-click handler for context menu
+        savedItem.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e, item);
+        });
         
         // Add favorite star button click handler
         const favoriteBtn = savedItem.querySelector('.favorite-star-btn');
@@ -4601,11 +5170,405 @@ async function showRenameUploadModal(item) {
     });
 }
 
+// Context menu function
+async function showContextMenu(event, item) {
+    if (!contextMenu) return;
+    
+    // Hide context menu first
+    hideContextMenu();
+    
+    const isFolder = item.type === 'folder';
+    const saved = await fetchSavedAnalyses('context-menu');
+    const folders = saved.filter(i => i.type === 'folder');
+    
+    // Build menu HTML
+    let menuHtml = '';
+    
+    if (isFolder) {
+        // Folder context menu
+        menuHtml = `
+            <div class="context-menu-item" data-action="rename-folder">
+                <span>Rename Folder</span>
+            </div>
+            <div class="context-menu-item" data-action="delete-folder">
+                <span>Delete Folder</span>
+            </div>
+        `;
+    } else {
+        // File context menu
+        menuHtml = `
+            <div class="context-menu-item" data-action="move-to-folder">
+                <span>Move to Folder</span>
+                <span class="context-menu-arrow">▶</span>
+            </div>
+            <div class="context-menu-submenu" id="folderSubmenu" style="display: none;">
+                <div class="context-menu-item" data-action="move-to-none">
+                    <span>No Folder</span>
+                </div>
+                ${folders.map(f => `
+                    <div class="context-menu-item" data-action="move-to-folder-item" data-folder-id="${escapeHtml(f.id)}">
+                        <span>${escapeHtml(f.folderName)}</span>
+                    </div>
+                `).join('')}
+            </div>
+            ${item.folderId ? `
+                <div class="context-menu-item" data-action="remove-from-folder">
+                    <span>Remove from Folder</span>
+                </div>
+            ` : ''}
+        `;
+    }
+    
+    // Add "New Folder" option for empty space or file menu
+    if (!isFolder) {
+        menuHtml += `
+            <div class="context-menu-separator"></div>
+            <div class="context-menu-item" data-action="new-folder">
+                <span>New Folder</span>
+            </div>
+        `;
+    }
+    
+    contextMenu.innerHTML = menuHtml;
+    
+    // Position menu
+    const x = event.clientX;
+    const y = event.clientY;
+    contextMenu.style.left = `${x}px`;
+    contextMenu.style.top = `${y}px`;
+    contextMenu.style.display = 'block';
+    
+    // Handle menu item clicks
+    contextMenu.addEventListener('click', async (e) => {
+        const menuItem = e.target.closest('.context-menu-item');
+        if (!menuItem) return;
+        
+        const action = menuItem.dataset.action;
+        
+        if (action === 'rename-folder') {
+            hideContextMenu();
+            await showRenameFolderModal(item);
+        } else if (action === 'delete-folder') {
+            hideContextMenu();
+            await showDeleteFolderModal(item);
+        } else if (action === 'move-to-folder') {
+            // Show submenu
+            const submenu = contextMenu.querySelector('#folderSubmenu');
+            if (submenu) {
+                submenu.style.display = 'block';
+                // Position submenu
+                const rect = contextMenu.getBoundingClientRect();
+                submenu.style.left = `${rect.width}px`;
+                submenu.style.top = `${menuItem.offsetTop}px`;
+            }
+        } else if (action === 'move-to-folder-item') {
+            hideContextMenu();
+            const folderId = menuItem.dataset.folderId;
+            await assignFileToFolder(item.id, folderId);
+        } else if (action === 'move-to-none') {
+            hideContextMenu();
+            await removeFileFromFolder(item.id);
+        } else if (action === 'remove-from-folder') {
+            hideContextMenu();
+            await removeFileFromFolder(item.id);
+        } else if (action === 'new-folder') {
+            hideContextMenu();
+            await showCreateFolderModal();
+        }
+    });
+    
+    // Hide menu when clicking outside
+    const hideOnClickOutside = (e) => {
+        if (!contextMenu.contains(e.target)) {
+            hideContextMenu();
+            document.removeEventListener('click', hideOnClickOutside);
+        }
+    };
+    
+    // Use setTimeout to avoid immediate hide
+    setTimeout(() => {
+        document.addEventListener('click', hideOnClickOutside);
+    }, 0);
+}
+
+function hideContextMenu() {
+    if (contextMenu) {
+        contextMenu.style.display = 'none';
+        contextMenu.innerHTML = '';
+    }
+}
+
+// Folder modals
+async function showCreateFolderModal() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('createFolderModal');
+        const input = document.getElementById('createFolderInput');
+        const cancel = document.getElementById('createFolderCancel');
+        const confirm = document.getElementById('createFolderConfirm');
+        
+        if (!modal || !input || !cancel || !confirm) {
+            console.error('Create folder modal elements not found');
+            resolve();
+            return;
+        }
+        
+        input.value = '';
+        
+        const handleCancel = () => {
+            modal.style.display = 'none';
+            document.removeEventListener('keydown', handleEscape);
+            resolve();
+        };
+        
+        const handleConfirm = async () => {
+            const folderName = input.value.trim();
+            if (!folderName) {
+                await showWarningModal('Folder name cannot be empty.');
+                return;
+            }
+            
+            const result = await createFolder(folderName);
+            if (result.success) {
+                modal.style.display = 'none';
+                document.removeEventListener('keydown', handleEscape);
+                resolve();
+            } else {
+                await showWarningModal(result.error || 'Failed to create folder.');
+            }
+        };
+        
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                handleCancel();
+            }
+        };
+        
+        // Remove old listeners
+        const newCancel = cancel.cloneNode(true);
+        cancel.parentNode.replaceChild(newCancel, cancel);
+        const newConfirm = confirm.cloneNode(true);
+        confirm.parentNode.replaceChild(newConfirm, confirm);
+        
+        newCancel.addEventListener('click', handleCancel);
+        newConfirm.addEventListener('click', handleConfirm);
+        document.addEventListener('keydown', handleEscape);
+        
+        modal.style.display = 'flex';
+        input.focus();
+    });
+}
+
+async function showRenameFolderModal(folder) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('renameFolderModal');
+        const input = document.getElementById('renameFolderInput');
+        const cancel = document.getElementById('renameFolderCancel');
+        const confirm = document.getElementById('renameFolderConfirm');
+        
+        if (!modal || !input || !cancel || !confirm) {
+            console.error('Rename folder modal elements not found');
+            resolve();
+            return;
+        }
+        
+        input.value = folder.folderName || '';
+        
+        const handleCancel = () => {
+            modal.style.display = 'none';
+            document.removeEventListener('keydown', handleEscape);
+            resolve();
+        };
+        
+        const handleConfirm = async () => {
+            const newName = input.value.trim();
+            if (!newName) {
+                await showWarningModal('Folder name cannot be empty.');
+                return;
+            }
+            
+            const result = await renameFolder(folder.id, newName);
+            if (result.success) {
+                modal.style.display = 'none';
+                document.removeEventListener('keydown', handleEscape);
+                resolve();
+            } else {
+                await showWarningModal(result.error || 'Failed to rename folder.');
+            }
+        };
+        
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                handleCancel();
+            }
+        };
+        
+        // Remove old listeners
+        const newCancel = cancel.cloneNode(true);
+        cancel.parentNode.replaceChild(newCancel, cancel);
+        const newConfirm = confirm.cloneNode(true);
+        confirm.parentNode.replaceChild(newConfirm, confirm);
+        
+        newCancel.addEventListener('click', handleCancel);
+        newConfirm.addEventListener('click', handleConfirm);
+        document.addEventListener('keydown', handleEscape);
+        
+        modal.style.display = 'flex';
+        input.focus();
+        input.select();
+    });
+}
+
+async function showDeleteFolderModal(folder) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('deleteFolderModal');
+        const message = document.getElementById('deleteFolderMessage');
+        const cancel = document.getElementById('deleteFolderCancel');
+        const moveOut = document.getElementById('deleteFolderMoveOut');
+        const deleteAll = document.getElementById('deleteFolderDeleteAll');
+        
+        if (!modal || !message || !cancel || !moveOut || !deleteAll) {
+            console.error('Delete folder modal elements not found');
+            resolve();
+            return;
+        }
+        
+        // Get file count
+        (async () => {
+            const saved = await fetchSavedAnalyses('delete-folder-modal');
+            const filesInFolder = saved.filter(item => 
+                item.type !== 'folder' && item.folderId === folder.id
+            );
+            
+            message.textContent = `Folder "${folder.folderName}" contains ${filesInFolder.length} file(s). What would you like to do?`;
+            
+            const handleCancel = () => {
+                modal.style.display = 'none';
+                document.removeEventListener('keydown', handleEscape);
+                resolve();
+            };
+            
+            const handleMoveOut = async () => {
+                const result = await deleteFolder(folder.id, false);
+                if (result.success) {
+                    modal.style.display = 'none';
+                    document.removeEventListener('keydown', handleEscape);
+                    resolve();
+                } else {
+                    await showWarningModal(result.error || 'Failed to delete folder.');
+                }
+            };
+            
+            const handleDeleteAll = async () => {
+                const result = await deleteFolder(folder.id, true);
+                if (result.success) {
+                    modal.style.display = 'none';
+                    document.removeEventListener('keydown', handleEscape);
+                    resolve();
+                } else {
+                    await showWarningModal(result.error || 'Failed to delete folder.');
+                }
+            };
+            
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    handleCancel();
+                }
+            };
+            
+            // Remove old listeners
+            const newCancel = cancel.cloneNode(true);
+            cancel.parentNode.replaceChild(newCancel, cancel);
+            const newMoveOut = moveOut.cloneNode(true);
+            moveOut.parentNode.replaceChild(newMoveOut, moveOut);
+            const newDeleteAll = deleteAll.cloneNode(true);
+            deleteAll.parentNode.replaceChild(newDeleteAll, deleteAll);
+            
+            newCancel.addEventListener('click', handleCancel);
+            newMoveOut.addEventListener('click', handleMoveOut);
+            newDeleteAll.addEventListener('click', handleDeleteAll);
+            document.addEventListener('keydown', handleEscape);
+            
+            modal.style.display = 'flex';
+        })();
+    });
+}
+
 // Render active saves as cards
-async function renderActiveSavesAsCards(activeItems) {
+async function renderActiveSavesAsCards(activeItems, folders = []) {
     if (!activeSavesCards) return;
     
     activeSavesCards.innerHTML = '';
+    
+    // Render folders first (only if not filtering by folder)
+    if (currentFolderFilter === null) {
+        const sortedFolders = [...folders].sort((a, b) => {
+            return a.folderName.localeCompare(b.folderName);
+        });
+        
+        for (const folder of sortedFolders) {
+            const folderCard = document.createElement('div');
+            folderCard.className = 'saved-card saved-card-folder';
+            folderCard.setAttribute('data-item-id', String(folder.id));
+            folderCard.setAttribute('data-folder-id', String(folder.id));
+            folderCard.setAttribute('draggable', 'false');
+            
+            folderCard.innerHTML = `
+                <div class="saved-card-folder-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div class="saved-card-content">
+                    <div class="saved-card-header">
+                        <div class="saved-card-name folder-name">${escapeHtml(folder.folderName)}</div>
+                    </div>
+                </div>
+            `;
+            
+            // Add click handler to filter by folder
+            folderCard.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!isEditMode) {
+                    currentFolderFilter = folder.id;
+                    await loadSavedAnalyses();
+                }
+            });
+            
+            // Add right-click handler for context menu
+            folderCard.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showContextMenu(e, folder);
+            });
+            
+            // Add drag-and-drop handlers for folders (drop targets)
+            folderCard.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                folderCard.classList.add('drag-over');
+            });
+            
+            folderCard.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderCard.classList.remove('drag-over');
+            });
+            
+            folderCard.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                folderCard.classList.remove('drag-over');
+                
+                const fileId = e.dataTransfer.getData('text/plain');
+                if (fileId) {
+                    await assignFileToFolder(fileId, folder.id);
+                }
+            });
+            
+            activeSavesCards.appendChild(folderCard);
+        }
+    }
     
     // Sort active items based on current sort settings
     const sorted = sortActiveSaves(activeItems);
@@ -4627,6 +5590,7 @@ async function renderActiveSavesAsCards(activeItems) {
         const card = document.createElement('div');
         card.className = 'saved-card';
         card.setAttribute('data-item-id', String(item.id));
+        card.setAttribute('draggable', 'true');
         
         // Format dates
         const dateEdited = item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
@@ -4693,6 +5657,28 @@ async function renderActiveSavesAsCards(activeItems) {
                 </div>
             </div>
         `;
+        
+        // Add drag-and-drop handlers
+        card.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', item.id);
+            e.dataTransfer.effectAllowed = 'move';
+            card.classList.add('dragging');
+        });
+        
+        card.addEventListener('dragend', (e) => {
+            card.classList.remove('dragging');
+            // Remove drag-over class from all folders
+            document.querySelectorAll('.saved-card-folder').forEach(f => {
+                f.classList.remove('drag-over');
+            });
+        });
+        
+        // Add right-click handler for context menu
+        card.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e, item);
+        });
         
         // Add click handler to open analysis
         card.addEventListener('click', async (e) => {

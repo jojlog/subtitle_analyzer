@@ -170,6 +170,9 @@
                     <div id="inactiveSavesList" class="inactive-saves-list"></div>
                 </div>
                 
+                <!-- Folder Breadcrumb -->
+                <div id="folderBreadcrumb" class="folder-breadcrumb" style="display: none;"></div>
+                
                 <!-- Sortable Header for Active Saves -->
                 <div id="activeSavesHeader" class="active-saves-header" style="display: none;">
                     <div class="sortable-header" id="sortableHeader">
@@ -360,6 +363,58 @@
                     <div class="custom-modal-footer">
                         <button id="renameUploadCancel" class="custom-modal-btn custom-modal-btn-cancel">Cancel</button>
                         <button id="renameUploadSave" class="custom-modal-btn custom-modal-btn-confirm">Save</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Context Menu -->
+            <div id="contextMenu" class="context-menu" style="display: none;"></div>
+
+            <!-- Create Folder Modal -->
+            <div id="createFolderModal" class="custom-modal">
+                <div class="custom-modal-content">
+                    <div class="custom-modal-header">
+                        <h3>Create Folder</h3>
+                    </div>
+                    <div class="custom-modal-body">
+                        <input type="text" id="createFolderInput" class="custom-modal-input" placeholder="Enter folder name">
+                    </div>
+                    <div class="custom-modal-footer">
+                        <button id="createFolderCancel" class="custom-modal-btn custom-modal-btn-cancel">Cancel</button>
+                        <button id="createFolderConfirm" class="custom-modal-btn custom-modal-btn-confirm">Create</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rename Folder Modal -->
+            <div id="renameFolderModal" class="custom-modal">
+                <div class="custom-modal-content">
+                    <div class="custom-modal-header">
+                        <h3>Rename Folder</h3>
+                    </div>
+                    <div class="custom-modal-body">
+                        <input type="text" id="renameFolderInput" class="custom-modal-input" placeholder="Enter folder name">
+                    </div>
+                    <div class="custom-modal-footer">
+                        <button id="renameFolderCancel" class="custom-modal-btn custom-modal-btn-cancel">Cancel</button>
+                        <button id="renameFolderConfirm" class="custom-modal-btn custom-modal-btn-confirm">Rename</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Delete Folder Modal -->
+            <div id="deleteFolderModal" class="custom-modal">
+                <div class="custom-modal-content">
+                    <div class="custom-modal-header">
+                        <h3>Delete Folder</h3>
+                    </div>
+                    <div class="custom-modal-body">
+                        <p id="deleteFolderMessage"></p>
+                    </div>
+                    <div class="custom-modal-footer">
+                        <button id="deleteFolderCancel" class="custom-modal-btn custom-modal-btn-cancel">Cancel</button>
+                        <button id="deleteFolderMoveOut" class="custom-modal-btn custom-modal-btn-confirm">Move Files Out</button>
+                        <button id="deleteFolderDeleteAll" class="custom-modal-btn" style="background-color: #dc3545;">Delete All</button>
                     </div>
                 </div>
             </div>

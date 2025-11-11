@@ -2517,3 +2517,162 @@ body.theme-purple .add-to-list-btn:hover {
     background-color: #111;
 }
 
+/* Folder Styles */
+.saved-item-folder {
+    background-color: var(--bg-tertiary);
+    border-left: 3px solid var(--accent-color);
+    cursor: pointer;
+}
+
+.saved-item-folder:hover {
+    background-color: var(--bg-quaternary);
+}
+
+.saved-item-folder .folder-icon {
+    margin-right: 8px;
+    color: var(--accent-color);
+}
+
+.saved-item-folder .folder-name {
+    font-weight: 600;
+    color: var(--accent-color);
+}
+
+.saved-card-folder {
+    background-color: var(--bg-tertiary);
+    border: 2px solid var(--accent-color);
+    cursor: pointer;
+    position: relative;
+}
+
+.saved-card-folder:hover {
+    background-color: var(--bg-quaternary);
+    border-color: var(--accent-hover);
+}
+
+.saved-card-folder-icon {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    color: var(--accent-color);
+    padding: 20px;
+}
+
+.saved-card-folder .saved-card-content {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
+    padding: 12px;
+}
+
+.saved-card-folder .folder-name {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Folder Breadcrumb */
+.folder-breadcrumb {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    gap: 8px;
+}
+
+.folder-breadcrumb-back {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.folder-breadcrumb-back:hover {
+    background-color: var(--bg-quaternary);
+}
+
+.folder-breadcrumb-separator {
+    color: var(--text-tertiary);
+}
+
+.folder-breadcrumb-folder {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+/* Context Menu */
+.context-menu {
+    position: fixed;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 10000;
+    min-width: 180px;
+    padding: 4px 0;
+    display: none;
+}
+
+.context-menu-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background-color 0.15s;
+}
+
+.context-menu-item:hover {
+    background-color: var(--bg-tertiary);
+}
+
+.context-menu-separator {
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 4px 0;
+}
+
+.context-menu-arrow {
+    color: var(--text-tertiary);
+    margin-left: 8px;
+}
+
+.context-menu-submenu {
+    position: absolute;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    min-width: 150px;
+    padding: 4px 0;
+    z-index: 10001;
+}
+
+/* Drag and Drop */
+.dragging {
+    opacity: 0.5;
+    cursor: move;
+}
+
+.drag-over {
+    background-color: var(--accent-color) !important;
+    opacity: 0.8;
+    border: 2px dashed var(--text-primary) !important;
+}
+
+.saved-item-folder.drag-over,
+.saved-card-folder.drag-over {
+    background-color: var(--accent-color);
+    border-color: var(--text-primary);
+}
+

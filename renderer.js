@@ -2852,6 +2852,74 @@ async function analyzeProject(projectId) {
         });
         analysisData.translations = Array.from(translationsMap.values());
         
+        // Remap expression translationIndex to match final translation array indices
+        // Expressions were associated with original subtitle entry indices, but after deduplication,
+        // the translation array has different indices. We need to remap them.
+        if (analysisData.expressions && analysisData.expressions.length > 0) {
+            // Create a map of Swedish text to translation array index
+            const swedishToTranslationIndex = new Map();
+            analysisData.translations.forEach((trans, transIndex) => {
+                if (trans.swedish) {
+                    const normalizedSwedish = normalizeTextForMatching(trans.swedish);
+                    // Store the translation array index for this Swedish text
+                    swedishToTranslationIndex.set(normalizedSwedish, transIndex);
+                }
+            });
+            
+            // Remap expressions: if expression has translationIndex and translationText,
+            // find the matching translation in the final array and update the index
+            analysisData.expressions = analysisData.expressions.map(expr => {
+                // If expression has translationText, use it to find the correct translation index
+                if (expr.translationText) {
+                    const normalizedSwedish = normalizeTextForMatching(expr.translationText);
+                    const newIndex = swedishToTranslationIndex.get(normalizedSwedish);
+                    if (newIndex !== undefined) {
+                        return {
+                            ...expr,
+                            translationIndex: newIndex
+                        };
+                    }
+                }
+                // If expression has translationIndex but no translationText, try to find it by matching
+                // against all translations (this handles cases where translationText wasn't stored)
+                if (expr.translationIndex !== undefined && expr.translationIndex !== null) {
+                    // Try to find the translation by matching the expression word against translations
+                    // This is a fallback for expressions that were associated before translationText was stored
+                    for (let i = 0; i < analysisData.translations.length; i++) {
+                        const trans = analysisData.translations[i];
+                        if (trans.swedish && expr.word) {
+                            const exprWord = expr.word.toLowerCase().trim();
+                            const wordToCheck = exprWord.startsWith('att ') ? exprWord.substring(4).trim() : exprWord;
+                            const swedishLower = trans.swedish.toLowerCase();
+                            
+                            // Check if expression word appears in this translation
+                            const words = wordToCheck.split(/\s+/).filter(w => w.length > 0);
+                            let matches = false;
+                            if (words.length > 1) {
+                                const phrasePattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*?');
+                                const regex = new RegExp(phrasePattern, 'i');
+                                matches = regex.test(swedishLower);
+                            } else {
+                                const escapedWord = wordToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                const wordBoundaryRegex = new RegExp(`(^|[^\\wåäöÅÄÖ])${escapedWord}([^\\wåäöÅÄÖ]|$)`, 'i');
+                                matches = wordBoundaryRegex.test(swedishLower);
+                            }
+                            
+                            if (matches) {
+                                return {
+                                    ...expr,
+                                    translationIndex: i,
+                                    translationText: trans.swedish
+                                };
+                            }
+                        }
+                    }
+                }
+                // If no match found, keep expression as-is (will use word-matching fallback)
+                return expr;
+            });
+        }
+        
         // Deduplicate expressions
         // Use word + translationIndex as key to allow same word in different lines
         const expressionsMap = new Map();
@@ -7810,12 +7878,16 @@ function displayStudyExpressions() {
         const currentSwedishText = currentStudyItem.item.swedish.toLowerCase();
         
         expressionsToShow = state.currentAnalysis.expressions.filter(expr => {
-            // First check: if expression has translationIndex, it must match exactly
-            if (expr.translationIndex !== undefined) {
-                return expr.translationIndex === currentTranslationIndex;
+            // If expression has translationIndex, it MUST match exactly - no word-matching fallback
+            // This ensures expressions are only shown for their specific line
+            if (expr.translationIndex !== undefined && expr.translationIndex !== null) {
+                // Normalize both indices to numbers for comparison
+                const exprIndex = Number(expr.translationIndex);
+                const currentIndex = Number(currentTranslationIndex);
+                return exprIndex === currentIndex;
             }
             
-            // Fallback for expressions without translationIndex (backward compatibility):
+            // Fallback ONLY for expressions without translationIndex (backward compatibility):
             // Only show if the word actually appears as a complete word in the current Swedish text
             // This handles old expressions that were added before translationIndex was implemented
             const exprWord = expr.word.toLowerCase().trim();

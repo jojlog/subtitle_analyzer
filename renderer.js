@@ -3455,7 +3455,43 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             // Get existing saved analyses
             let saved = await fetchSavedAnalyses('manual-save');
             
-            saved.push(savedAnalysis);
+            // Check for duplicate filename before saving
+            const duplicateIndex = saved.findIndex(item =>
+                item.fileName === savedAnalysis.fileName &&
+                item.status !== 'processing' && // Only check completed analyses
+                item.analysis // Must have analysis data
+            );
+            
+            if (duplicateIndex !== -1) {
+                // Duplicate found - ask user if they want to overwrite
+                const overwrite = confirm(
+                    `A file with the name "${savedAnalysis.fileName}" already exists.\n\n` +
+                    `Do you want to overwrite it?`
+                );
+                
+                if (overwrite) {
+                    // Overwrite existing entry, preserving dateCreated and isFavorite
+                    const existingItem = saved[duplicateIndex];
+                    savedAnalysis.dateCreated = existingItem.dateCreated || savedAnalysis.dateCreated;
+                    savedAnalysis.isFavorite = existingItem.isFavorite !== undefined ? existingItem.isFavorite : false;
+                    savedAnalysis.id = existingItem.id; // Keep the same ID
+                    
+                    debugLog('🔄 MANUAL SAVE OVERWRITING DUPLICATE', {
+                        fileName: savedAnalysis.fileName,
+                        existingItemId: existingItem.id,
+                        newItemId: savedAnalysis.id
+                    }, 'warn');
+                    
+                    saved[duplicateIndex] = savedAnalysis;
+                } else {
+                    // User cancelled - don't save
+                    debugLog('❌ MANUAL SAVE CANCELLED', { reason: 'User declined to overwrite duplicate' }, 'info');
+                    return;
+                }
+            } else {
+                // No duplicate - add new entry
+                saved.push(savedAnalysis);
+            }
             
             // Keep only last 50 analyses
             if (saved.length > 50) {
@@ -4129,178 +4165,27 @@ function renderActiveSaves(activeItems) {
                             </span>
                         <span class="saved-item-date-edited">${dateEditedStr}</span>
                         <span class="saved-item-date-created">${dateCreatedStr}</span>
-                            <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
                         </div>
                     </div>
                 </div>
             `;
             
-        // Add rename functionality
-            const renameInput = savedItem.querySelector('.saved-item-rename-input');
-            const nameSpan = savedItem.querySelector('.saved-item-name');
-        
-        // Function to enter edit mode
-        const enterEditMode = () => {
-            if (isEditMode) return; // Don't allow editing in edit mode
-            nameSpan.style.display = 'none';
-            const topRow = savedItem.querySelector('.saved-item-top-row');
-            topRow.insertBefore(renameInput, nameSpan.nextSibling);
-            renameInput.style.display = 'block';
-            renameInput.focus();
-            renameInput.select();
-        };
-            
-            // Function to save the rename
-            const saveRename = async () => {
-            const rawName = renameInput.value;
-            const originalName = item.fileName;
-            
-            const validationResult = validateFileName(rawName);
-            if (!validationResult.valid) {
-                debugLog('❌ INVALID FILENAME', {
-                    fileName: rawName,
-                    error: validationResult.error
-                }, 'error');
-                await showWarningModal(validationResult.error);
-                renameInput.value = item.fileName;
-                exitEditMode();
-                return;
-            }
-            
-            const sanitizedName = validationResult.sanitized;
-            
-            if (sanitizedName === item.fileName) {
-                renameInput.value = sanitizedName;
-                exitEditMode();
-                return;
-            }
-            
-            let saved = await fetchSavedAnalyses('rename-saved-item');
-            
-            const duplicateItem = saved.find(s => 
-                s.fileName === sanitizedName && 
-                s.id !== item.id &&
-                s.status !== 'processing' &&
-                s.analysis
-            );
-            
-            if (duplicateItem) {
-                debugLog('⚠️ DUPLICATE FILENAME', {
-                    fileName: sanitizedName,
-                    duplicateId: duplicateItem.id
-                }, 'warn');
-                await showWarningModal(`A file with the name "${sanitizedName}" already exists. Please choose a different name.`);
-                renameInput.value = item.fileName;
-                exitEditMode();
-                return;
-            }
-                
-                try {
-                        const index = saved.findIndex(s => s.id === item.id);
-                        if (index !== -1) {
-                    saved[index].fileName = sanitizedName;
-                        saved[index].dateEdited = new Date().toISOString();
-                        if (!saved[index].dateCreated) {
-                        saved[index].dateCreated = saved[index].dateEdited;
-                    }
-                    
-                    await saveAnalysesSafe(saved);
-                }
-                
-                item.fileName = sanitizedName;
-                if (index !== -1 && saved[index]) {
-                            item.dateEdited = saved[index].dateEdited;
-                } else {
-                    item.dateEdited = new Date().toISOString();
-                            }
-                nameSpan.textContent = sanitizedName;
-                renameInput.value = sanitizedName;
-                
-                await loadSavedAnalyses();
-                    } catch (error) {
-                    debugLog('❌ ERROR RENAMING FILE', {
-                        itemId: item.id,
-                    oldName: originalName,
-                    newName: sanitizedName,
-                        error: error.message,
-                        stack: error.stack
-                    }, 'error');
-                item.fileName = originalName;
-                    await showWarningModal('Error renaming file: ' + error.message);
-                        renameInput.value = item.fileName;
-            } finally {
-                    exitEditMode();
-                    }
-        };
-        
-        const exitEditMode = () => {
-                nameSpan.style.display = '';
-                renameInput.style.display = 'none';
-        };
-        
-        // Per spec: Double-click to rename
-        // Use click delay pattern to prevent conflict with single-click handler
-        let clickTimer = null;
-        
-        nameSpan.addEventListener('click', (e) => {
-            e.stopPropagation(); // Prevent savedItem click handler from firing
-            
-            // Clear existing timer if any
-            if (clickTimer) {
-                clearTimeout(clickTimer);
-            }
-            
-            // Set timer for single-click action
-            clickTimer = setTimeout(() => {
-                clickTimer = null;
-                // Single click - open analysis
+        // Add click handler for name span - just open analysis
+        const nameSpan = savedItem.querySelector('.saved-item-name');
+        if (nameSpan) {
+            nameSpan.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent savedItem click handler from firing
                 if (!isEditMode) {
                     reopenAnalysis(item);
                 }
-            }, 300); // 300ms delay to detect double-click
-        });
-        
-        // Handle double-click event explicitly
-        nameSpan.addEventListener('dblclick', (e) => {
-                        e.stopPropagation();
-            // Cancel single-click timer
-            if (clickTimer) {
-                clearTimeout(clickTimer);
-                clickTimer = null;
-            }
-            // Trigger rename mode
-            if (!isEditMode) {
-                enterEditMode();
-            }
-        });
-        
-        if (renameInput && nameSpan) {
-            // Enter key to save
-                renameInput.addEventListener('keydown', async (e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        await saveRename();
-                    } else if (e.key === 'Escape') {
-                        e.preventDefault();
-                    renameInput.value = item.fileName;
-                    exitEditMode();
-                }
             });
-            
-            // Blur (click outside) to save
-            renameInput.addEventListener('blur', async () => {
-                await saveRename();
-            });
-            
-            renameInput.addEventListener('click', (e) => e.stopPropagation());
         }
         
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Exclude clicks on rename input, name span, favorite button, and edit button (handled separately)
-                if (e.target.classList.contains('saved-item-rename-input') ||
-                    e.target.classList.contains('saved-item-name') ||
+                // Exclude clicks on name span, favorite button, and edit button (handled separately)
+                if (e.target.classList.contains('saved-item-name') ||
                     e.target.closest('.favorite-star-btn') ||
                     e.target.closest('.saved-item-edit-btn')) {
                     return;
@@ -4314,9 +4199,9 @@ function renderActiveSaves(activeItems) {
             }
             savedItem.addEventListener('click', (e) => {
                 if (e.target.type !== 'checkbox' && 
-                    !e.target.classList.contains('saved-item-rename-input') &&
                     !e.target.classList.contains('saved-item-name') &&
-                    !e.target.closest('.favorite-star-btn')) {
+                    !e.target.closest('.favorite-star-btn') &&
+                    !e.target.closest('.saved-item-edit-btn')) {
                     const checkbox = savedItem.querySelector('.saved-item-checkbox');
                     if (checkbox) {
                         checkbox.checked = !checkbox.checked;
@@ -4378,13 +4263,14 @@ async function showRenameUploadModal(item) {
         const imageUploadInput = document.getElementById('imageUploadInput');
         const imageUploadBtn = document.getElementById('imageUploadBtn');
         const imageRemoveBtn = document.getElementById('imageRemoveBtn');
+        const imageDeleteBtn = document.getElementById('imageDeleteBtn');
         const imagePreview = document.getElementById('imagePreview');
         const imagePreviewPlaceholder = document.getElementById('imagePreviewPlaceholder');
         const renameUploadCancel = document.getElementById('renameUploadCancel');
         const renameUploadSave = document.getElementById('renameUploadSave');
         
         if (!renameUploadModal || !renameUploadInput || !imageUploadInput || 
-            !imageUploadBtn || !imageRemoveBtn || !imagePreview || 
+            !imageUploadBtn || !imageRemoveBtn || !imageDeleteBtn || !imagePreview || 
             !imagePreviewPlaceholder || !renameUploadCancel || !renameUploadSave) {
             console.error('Rename/Upload modal elements not found');
             resolve();
@@ -4411,6 +4297,13 @@ async function showRenameUploadModal(item) {
                         imagePreviewPlaceholder.style.display = 'none';
                         imageRemoveBtn.style.display = 'block';
                         imagePreviewUrl = fileUrl;
+                        // Update delete button visibility after image loads
+                        requestAnimationFrame(() => {
+                            const currentDeleteBtn = document.getElementById('imageDeleteBtn');
+                            if (currentDeleteBtn) {
+                                currentDeleteBtn.style.display = 'flex';
+                            }
+                        });
                     } else {
                         imagePreview.style.display = 'none';
                         imagePreviewPlaceholder.style.display = 'flex';
@@ -4431,11 +4324,6 @@ async function showRenameUploadModal(item) {
         
         loadCurrentThumbnail();
         
-        // Image upload button handler
-        const handleImageUpload = () => {
-            imageUploadInput.click();
-        };
-        
         // Image file input change handler
         const handleImageFileChange = (e) => {
             const file = e.target.files[0];
@@ -4448,10 +4336,36 @@ async function showRenameUploadModal(item) {
                 const reader = new FileReader();
                 reader.onload = (event) => {
                     imagePreviewUrl = event.target.result;
-                    imagePreview.src = imagePreviewUrl;
-                    imagePreview.style.display = 'block';
-                    imagePreviewPlaceholder.style.display = 'none';
-                    imageRemoveBtn.style.display = 'block';
+                    
+                    // Get current preview elements (may have been cloned)
+                    const currentPreview = document.getElementById('imagePreview');
+                    const currentPlaceholder = document.getElementById('imagePreviewPlaceholder');
+                    
+                    if (currentPreview && currentPlaceholder) {
+                        currentPreview.src = imagePreviewUrl;
+                        currentPreview.style.display = 'block';
+                        currentPlaceholder.style.display = 'none';
+                        
+                        // Set up error handler
+                        currentPreview.onerror = () => {
+                            currentPreview.style.display = 'none';
+                            currentPlaceholder.style.display = 'flex';
+                        };
+                    }
+                    
+                    // Get the current remove button (may have been cloned)
+                    const currentRemoveBtn = document.getElementById('imageRemoveBtn');
+                    if (currentRemoveBtn) {
+                        currentRemoveBtn.style.display = 'block';
+                    }
+                    // Get the current delete button (may have been cloned)
+                    const currentDeleteBtn = document.getElementById('imageDeleteBtn');
+                    if (currentDeleteBtn) {
+                        currentDeleteBtn.style.display = 'flex';
+                    }
+                };
+                reader.onerror = () => {
+                    showWarningModal('Failed to read image file.');
                 };
                 reader.readAsDataURL(file);
             }
@@ -4464,8 +4378,25 @@ async function showRenameUploadModal(item) {
             imagePreview.src = '';
             imagePreview.style.display = 'none';
             imagePreviewPlaceholder.style.display = 'flex';
-            imageRemoveBtn.style.display = 'none';
-            imageUploadInput.value = '';
+            // Get the current remove button (may have been cloned)
+            const currentRemoveBtn = document.getElementById('imageRemoveBtn');
+            if (currentRemoveBtn) {
+                currentRemoveBtn.style.display = 'none';
+            }
+            const currentDeleteBtn = document.getElementById('imageDeleteBtn');
+            if (currentDeleteBtn) {
+                currentDeleteBtn.style.display = 'none';
+            }
+            // Get the current input (may have been cloned)
+            const currentInput = document.getElementById('imageUploadInput');
+            if (currentInput) {
+                currentInput.value = '';
+            }
+        };
+        
+        // Delete image handler (same as remove, but triggered by X button)
+        const handleDeleteImage = () => {
+            handleRemoveImage();
         };
         
         // Cancel handler
@@ -4523,12 +4454,60 @@ async function showRenameUploadModal(item) {
                         if (result.success) {
                             saved[index].thumbnailPath = result.path;
                             await saveAnalysesSafe(saved);
-                            await loadSavedAnalyses();
-                            renameUploadModal.style.display = 'none';
-                            document.removeEventListener('keydown', handleEscape);
+                            
+                            // Small delay to ensure file is fully written and accessible
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            
+                            // Update preview to show saved file immediately
+                            try {
+                                const thumbnailResult = await electronBridge.getThumbnailPath(item.id);
+                                if (thumbnailResult.success && thumbnailResult.exists) {
+                                    const isWindows = navigator.platform.toLowerCase().includes('win');
+                                    const fileUrl = isWindows 
+                                        ? `file:///${thumbnailResult.path.replace(/\\/g, '/')}`
+                                        : `file://${thumbnailResult.path}`;
+                                    // Add cache busting to force reload
+                                    const cacheBustUrl = `${fileUrl}?t=${Date.now()}`;
+                                    
+                                    // Get current preview elements (may have been cloned)
+                                    const currentPreview = document.getElementById('imagePreview');
+                                    const currentPlaceholder = document.getElementById('imagePreviewPlaceholder');
+                                    
+                                    if (currentPreview && currentPlaceholder) {
+                                        // Set up error handler in case image fails to load
+                                        const handleImageError = () => {
+                                            currentPreview.style.display = 'none';
+                                            currentPlaceholder.style.display = 'flex';
+                                        };
+                                        
+                                        // Remove old error handler if exists
+                                        currentPreview.onerror = null;
+                                        currentPreview.onload = null;
+                                        
+                                        // Set new error handler
+                                        currentPreview.onerror = handleImageError;
+                                        
+                                        // Set image source
+                                        currentPreview.src = cacheBustUrl;
+                                        currentPreview.style.display = 'block';
+                                        currentPlaceholder.style.display = 'none';
+                                        imagePreviewUrl = fileUrl;
+                                    }
+                                }
+                            } catch (error) {
+                                console.error('Error updating preview after save:', error);
+                            }
+                            
+                            // Revoke data URL if it was used
                             if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
                                 URL.revokeObjectURL(imagePreviewUrl);
                             }
+                            
+                            // Reload saved analyses to update the list
+                            await loadSavedAnalyses();
+                            
+                            renameUploadModal.style.display = 'none';
+                            document.removeEventListener('keydown', handleEscape);
                             await showWarningModal('File updated successfully!');
                             resolve();
                         } else {
@@ -4580,6 +4559,9 @@ async function showRenameUploadModal(item) {
         const newImageRemoveBtn = imageRemoveBtn.cloneNode(true);
         imageRemoveBtn.parentNode.replaceChild(newImageRemoveBtn, imageRemoveBtn);
         
+        const newImageDeleteBtn = imageDeleteBtn.cloneNode(true);
+        imageDeleteBtn.parentNode.replaceChild(newImageDeleteBtn, imageDeleteBtn);
+        
         const newCancelBtn = renameUploadCancel.cloneNode(true);
         renameUploadCancel.parentNode.replaceChild(newCancelBtn, renameUploadCancel);
         
@@ -4589,9 +4571,15 @@ async function showRenameUploadModal(item) {
         const newImageInput = imageUploadInput.cloneNode(true);
         imageUploadInput.parentNode.replaceChild(newImageInput, imageUploadInput);
         
+        // Image upload button handler (must be defined after cloning to use newImageInput)
+        const handleImageUpload = () => {
+            newImageInput.click();
+        };
+        
         // Add event listeners
         newImageUploadBtn.addEventListener('click', handleImageUpload);
         newImageRemoveBtn.addEventListener('click', handleRemoveImage);
+        newImageDeleteBtn.addEventListener('click', handleDeleteImage);
         newCancelBtn.addEventListener('click', handleCancel);
         newSaveBtn.addEventListener('click', handleSave);
         newImageInput.addEventListener('change', handleImageFileChange);
@@ -4601,6 +4589,15 @@ async function showRenameUploadModal(item) {
         renameUploadModal.style.display = 'flex';
         renameUploadInput.focus();
         renameUploadInput.select();
+        
+        // Update delete button visibility after cloning (if image is already loaded)
+        requestAnimationFrame(() => {
+            const currentDeleteBtn = document.getElementById('imageDeleteBtn');
+            const currentPreview = document.getElementById('imagePreview');
+            if (currentDeleteBtn && currentPreview && currentPreview.style.display !== 'none' && currentPreview.src) {
+                currentDeleteBtn.style.display = 'flex';
+            }
+        });
     });
 }
 
@@ -4654,7 +4651,10 @@ async function renderActiveSavesAsCards(activeItems) {
                 const fileUrl = isWindows 
                     ? `file:///${result.path.replace(/\\/g, '/')}`
                     : `file://${result.path}`;
-                thumbnailHtml = `<img src="${fileUrl}" class="saved-card-thumbnail" alt="Preview" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`;
+                // Add cache busting based on file modification time or current time
+                // This ensures thumbnails update immediately when changed
+                const cacheBustUrl = `${fileUrl}?t=${Date.now()}`;
+                thumbnailHtml = `<img src="${cacheBustUrl}" class="saved-card-thumbnail" alt="Preview" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`;
                 placeholderHtml = `<div class="saved-card-thumbnail-placeholder" style="display: none;">No Preview</div>`;
             } else {
                 placeholderHtml = `<div class="saved-card-thumbnail-placeholder">No Preview</div>`;

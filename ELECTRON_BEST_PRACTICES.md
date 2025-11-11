@@ -86,3 +86,4 @@ The application now follows Electron security best practices. The implemented ch
 
 
 
+

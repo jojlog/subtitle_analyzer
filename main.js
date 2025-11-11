@@ -721,8 +721,9 @@ ipcMain.handle('save-preview-image', async (event, analysisId, imageData) => {
     await ensureThumbnailDir();
     const thumbnailPath = getThumbnailPath(analysisId);
     
-    // Convert base64 to buffer
-    const base64Data = imageData.replace(/^data:image\/png;base64,/, '');
+    // Convert base64 to buffer - handle any image format (png, jpeg, jpg, gif, webp, etc.)
+    // Remove data URL prefix (e.g., "data:image/png;base64," or "data:image/jpeg;base64,")
+    const base64Data = imageData.replace(/^data:image\/[a-z]+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
     
     // Write image file
@@ -730,6 +731,14 @@ ipcMain.handle('save-preview-image', async (event, analysisId, imageData) => {
     
     // Set secure file permissions (Unix/Mac only)
     await setSecureFilePermissions(thumbnailPath);
+    
+    // Verify file was written successfully
+    try {
+      await fs.access(thumbnailPath);
+    } catch (accessError) {
+      debugLog('error', 'Image file not accessible after write', { error: accessError.message, analysisId });
+      return { success: false, error: 'Image file not accessible after write' };
+    }
     
     const relativePath = `thumbnails/${analysisId}.png`;
     debugLog('info', 'Preview image saved', { analysisId, path: relativePath });

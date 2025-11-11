@@ -44,6 +44,9 @@ let savedViewMode = 'list'; // 'list' or 'card'
 let currentSortColumn = 'dateEdited'; // Default sort by dateEdited
 let currentSortDirection = 'desc'; // Default descending (newest first)
 let currentFolderFilter = null; // Currently selected folder ID, null = show all
+let startupCleanupComplete = false; // Track if startup cleanup has completed
+let startupCleanupPromise = null; // Promise for startup cleanup to allow awaiting
+let draggedItemId = null; // Store dragged item ID for Electron drag-and-drop compatibility
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
 let homeBtn;
 let studyModal, studyTitle, studyItemContent, studyExpressionsSection, studyExpressionsContent, studyChatMessages, studyChatInput, studyChatSendBtn, closeStudyBtn, studyHistoryBtn, saveStudyBtn, studyPrevBtn, studyNextBtn;
@@ -240,6 +243,10 @@ function addFolderToUI(folder) {
         folderItem.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            // Set data in dragover for Electron compatibility
+            if (draggedItemId) {
+                e.dataTransfer.setData('text/plain', draggedItemId);
+            }
             e.dataTransfer.dropEffect = 'move';
             folderItem.classList.add('drag-over');
         });
@@ -255,9 +262,22 @@ function addFolderToUI(folder) {
             e.stopPropagation();
             folderItem.classList.remove('drag-over');
             
-            const fileId = e.dataTransfer.getData('text/plain');
+            // Get file ID from dataTransfer or fallback to stored draggedItemId (Electron compatibility)
+            // In Electron, getData might return empty string, so we use draggedItemId as fallback
+            let fileId = e.dataTransfer.getData('text/plain');
+            if (!fileId || fileId === '') {
+                fileId = draggedItemId;
+            }
+            debugLog('🎯 DROP EVENT (addFolderToUI LIST)', { 
+                dataTransferValue: e.dataTransfer.getData('text/plain'),
+                draggedItemId: draggedItemId,
+                finalFileId: fileId,
+                folderId: folder.id
+            });
             if (fileId) {
                 await assignFileToFolder(fileId, folder.id);
+            } else {
+                debugLog('❌ DROP FAILED - NO FILE ID', {}, 'error');
             }
         });
         
@@ -324,6 +344,10 @@ function addFolderToUI(folder) {
             folderCard.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                // Set data in dragover for Electron compatibility
+                if (draggedItemId) {
+                    e.dataTransfer.setData('text/plain', draggedItemId);
+                }
                 e.dataTransfer.dropEffect = 'move';
                 folderCard.classList.add('drag-over');
             });
@@ -339,9 +363,22 @@ function addFolderToUI(folder) {
                 e.stopPropagation();
                 folderCard.classList.remove('drag-over');
                 
-                const fileId = e.dataTransfer.getData('text/plain');
+                // Get file ID from dataTransfer or fallback to stored draggedItemId (Electron compatibility)
+                // In Electron, getData might return empty string, so we use draggedItemId as fallback
+                let fileId = e.dataTransfer.getData('text/plain');
+                if (!fileId || fileId === '') {
+                    fileId = draggedItemId;
+                }
+                debugLog('🎯 DROP EVENT (addFolderToUI CARD)', { 
+                    dataTransferValue: e.dataTransfer.getData('text/plain'),
+                    draggedItemId: draggedItemId,
+                    finalFileId: fileId,
+                    folderId: folder.id
+                });
                 if (fileId) {
                     await assignFileToFolder(fileId, folder.id);
+                } else {
+                    debugLog('❌ DROP FAILED - NO FILE ID', {}, 'error');
                 }
             });
             
@@ -468,14 +505,44 @@ async function deleteFolder(folderId, deleteFiles = false) {
     }
 }
 
+// Forward declaration - function defined later in file
+// This is needed because ES6 modules don't hoist function declarations
+let loadSavedAnalyses;
+
 async function assignFileToFolder(fileId, folderId) {
+    debugLog('🔄 assignFileToFolder CALLED', { fileId, folderId }, 'info');
     const saved = await fetchSavedAnalyses('assign-file-to-folder');
     
     const fileIndex = saved.findIndex(item => 
         item.type !== 'folder' && item.id === fileId
     );
     if (fileIndex === -1) {
+        debugLog('❌ FILE NOT FOUND', { fileId, savedCount: saved.length }, 'error');
         return { success: false, error: 'File not found' };
+    }
+    
+    const fileToMove = saved[fileIndex];
+    const fileName = fileToMove.fileName;
+    const currentFolderId = fileToMove.folderId ?? null;
+    
+    debugLog('📋 FILE TO MOVE', { fileId, fileName, currentFolderId, targetFolderId: folderId }, 'info');
+    
+    // If moving to the same folder, do nothing
+    // BUT: If the file appears in the main view (currentFolderFilter === null) but has a folderId,
+    // this might be a display issue. Still allow the move to "refresh" the assignment.
+    if (currentFolderId === folderId) {
+        debugLog('⚠️ ALREADY IN TARGET FOLDER', { 
+            fileId, 
+            folderId, 
+            fileName,
+            currentFolderId,
+            currentFolderFilter,
+            note: 'File is already in this folder. If visible in main view, this may be a display issue.'
+        }, 'warn');
+        // Still return success, but the UI should be updated to reflect the correct state
+        // Force a reload to ensure UI matches data
+        await loadSavedAnalyses();
+        return { success: true, alreadyInFolder: true };
     }
     
     // Verify folder exists if folderId is not null
@@ -486,14 +553,144 @@ async function assignFileToFolder(fileId, folderId) {
         if (!folderExists) {
             return { success: false, error: 'Folder not found' };
         }
+        
+        // Check if there's already a file with the same name in the target folder
+        const existingFileIndex = saved.findIndex(item => 
+            item.type !== 'folder' &&
+            item.fileName === fileName &&
+            (item.folderId ?? null) === folderId &&
+            item.id !== fileId // Exclude the file we're moving
+        );
+        
+        if (existingFileIndex !== -1) {
+            // File with same name already exists in target folder
+            // Merge: keep the newer one (by dateEdited), or the one with analysis data
+            const existingFile = saved[existingFileIndex];
+            const fileToMoveDate = new Date(fileToMove.dateEdited || fileToMove.dateCreated || new Date());
+            const existingFileDate = new Date(existingFile.dateEdited || existingFile.dateCreated || new Date());
+            
+            // Determine which one to keep
+            let keepExisting = true;
+            if (!existingFile.analysis && fileToMove.analysis) {
+                keepExisting = false;
+            } else if (fileToMoveDate > existingFileDate && fileToMove.analysis) {
+                keepExisting = false;
+            }
+            
+            if (keepExisting) {
+                // Keep existing file, remove the one being moved
+                debugLog('🔄 FILE MOVE: TARGET EXISTS, REMOVING SOURCE', {
+                    fileName,
+                    targetFolderId: folderId,
+                    keptFileId: existingFile.id,
+                    removedFileId: fileId
+                });
+                // Remove the file being moved (use filter to avoid index issues)
+                saved = saved.filter(item => item.id !== fileId);
+            } else {
+                // Replace existing file with the one being moved
+                debugLog('🔄 FILE MOVE: TARGET EXISTS, REPLACING', {
+                    fileName,
+                    targetFolderId: folderId,
+                    replacedFileId: existingFile.id,
+                    newFileId: fileId
+                });
+                // Remove the existing file in target folder first (to avoid index issues)
+                saved = saved.filter(item => item.id !== existingFile.id);
+                // Find the file being moved again (index may have changed)
+                const updatedFileIndex = saved.findIndex(item => item.id === fileId);
+                if (updatedFileIndex !== -1) {
+                    saved[updatedFileIndex].folderId = folderId;
+                }
+            }
+        } else {
+            // No duplicate in target folder, just move the file
+            debugLog('📦 MOVING FILE TO FOLDER', { fileId, fileName, fromFolder: currentFolderId, toFolder: folderId }, 'info');
+            saved[fileIndex].folderId = folderId;
+        }
+    } else {
+        // Moving to no folder (removing from folder)
+        // Check if there's already a file with the same name with no folder
+        const existingFileIndex = saved.findIndex(item => 
+            item.type !== 'folder' &&
+            item.fileName === fileName &&
+            (item.folderId ?? null) === null &&
+            item.id !== fileId // Exclude the file we're moving
+        );
+        
+        if (existingFileIndex !== -1) {
+            // File with same name already exists with no folder
+            // Merge: keep the newer one (by dateEdited), or the one with analysis data
+            const existingFile = saved[existingFileIndex];
+            const fileToMoveDate = new Date(fileToMove.dateEdited || fileToMove.dateCreated || new Date());
+            const existingFileDate = new Date(existingFile.dateEdited || existingFile.dateCreated || new Date());
+            
+            // Determine which one to keep
+            let keepExisting = true;
+            if (!existingFile.analysis && fileToMove.analysis) {
+                keepExisting = false;
+            } else if (fileToMoveDate > existingFileDate && fileToMove.analysis) {
+                keepExisting = false;
+            }
+            
+            if (keepExisting) {
+                // Keep existing file, remove the one being moved
+                debugLog('🔄 FILE MOVE: TARGET EXISTS (NO FOLDER), REMOVING SOURCE', {
+                    fileName,
+                    keptFileId: existingFile.id,
+                    removedFileId: fileId
+                });
+                // Remove the file being moved (use filter to avoid index issues)
+                saved = saved.filter(item => item.id !== fileId);
+            } else {
+                // Replace existing file with the one being moved
+                debugLog('🔄 FILE MOVE: TARGET EXISTS (NO FOLDER), REPLACING', {
+                    fileName,
+                    replacedFileId: existingFile.id,
+                    newFileId: fileId
+                });
+                // Remove the existing file with no folder first (to avoid index issues)
+                saved = saved.filter(item => item.id !== existingFile.id);
+                // Find the file being moved again (index may have changed)
+                const updatedFileIndex = saved.findIndex(item => item.id === fileId);
+                if (updatedFileIndex !== -1) {
+                    saved[updatedFileIndex].folderId = null;
+                }
+            }
+        } else {
+            // No duplicate, just move the file
+            saved[fileIndex].folderId = null;
+        }
     }
     
-    saved[fileIndex].folderId = folderId;
+    debugLog('💾 SAVING AFTER MOVE', { fileId, folderId, fileName, savedCount: saved.length }, 'info');
     const result = await saveAnalysesSafe(saved);
     
     if (result.success) {
-        debugLog('✅ FILE ASSIGNED TO FOLDER', { fileId, folderId }, 'success');
+        debugLog('✅ FILE MOVED TO FOLDER', { fileId, folderId, fileName, savedCount: saved.length }, 'success');
+        // Force immediate UI update by reloading saved analyses
+        // This ensures the card view updates immediately after moving a file
         await loadSavedAnalyses();
+        
+        // Ensure the card view container is visible and properly displayed
+        if (savedViewMode === 'card' && activeSavesCards) {
+            // Use requestAnimationFrame to ensure UI updates in the next frame
+            requestAnimationFrame(() => {
+                // Explicitly ensure the card view is visible
+                updateViewToggleButtons();
+                // Force a reflow to ensure the UI updates
+                void activeSavesCards.offsetHeight;
+                debugLog('🔄 CARD VIEW REFRESHED AFTER MOVE', { 
+                    fileId, 
+                    folderId, 
+                    viewMode: savedViewMode,
+                    cardsContainerDisplay: activeSavesCards.style.display,
+                    cardsContainerVisible: activeSavesCards.style.display !== 'none'
+                });
+            });
+        }
+    } else {
+        debugLog('❌ FAILED TO SAVE AFTER MOVE', { fileId, folderId, fileName, error: result.error }, 'error');
     }
     
     return result;
@@ -1121,9 +1318,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Cleanup inactive saves on startup (per spec: inactive saves are temporary, cleared on restart)
-    cleanupInactiveSavesOnStartup().catch(err => {
+    // Store the promise IMMEDIATELY so loadSavedAnalyses can await it if needed
+    // This must be set synchronously before any async operations
+    startupCleanupPromise = (async () => {
+        try {
+            await cleanupInactiveSavesOnStartup();
+        } catch (err) {
         console.error('Error during startup cleanup:', err);
-    });
+            startupCleanupComplete = true; // Mark as complete even on error
+        }
+    })();
     
     // Clear study modal heights on startup to return to defaults
     localStorage.removeItem('studyExpressionsHeight');
@@ -2097,15 +2301,9 @@ function renderFileProjectsList() {
                 </div>
                 <div class="file-project-actions">
                     ${isAnalyzingProject ? 
-                        `<div class="action-status-container">
-                            <button class="pause-project-btn analyze-project-btn" data-project-id="${project.id}">
+                        `<button class="pause-project-btn analyze-project-btn" data-project-id="${project.id}">
                                 ${state.isPaused ? 'Resume' : 'Pause'}
-                            </button>
-                            ${project.estimatedTimeRemaining ? 
-                                `<div class="file-project-time-estimate">expected time left: ${project.estimatedTimeRemaining}</div>` :
-                                ''
-                            }
-                        </div>` :
+                        </button>` :
                         // Only show Start button if not queued, or if queued but paused
                         // Completed files don't have action buttons (per plan - no re-analyze)
                         !isQueued || state.isPaused ? 
@@ -2665,8 +2863,18 @@ async function analyzeProject(projectId) {
             const savedForDuplicateCheck = await fetchSavedAnalyses('autosave-duplicate-check');
             
             // Check if duplicate exists (excluding current placeholder)
+            // Get folderId from placeholder if it exists, otherwise null
+            let currentFolderId = null;
+            if (placeholderId) {
+                const placeholderItem = savedForDuplicateCheck.find(item => item.id === placeholderId);
+                if (placeholderItem) {
+                    currentFolderId = placeholderItem.folderId ?? null;
+                }
+            }
+            
             const duplicateIndex = savedForDuplicateCheck.findIndex(item =>
                 item.fileName === finalFileName &&
+                (item.folderId ?? null) === currentFolderId &&
                 (placeholderId ? item.id !== placeholderId : true) &&
                 item.status !== 'processing' // Only check completed analyses
             );
@@ -2704,8 +2912,10 @@ async function analyzeProject(projectId) {
                 }
             } else {
                 // If overwriting an existing entry, preserve its dateCreated and isFavorite
+                // Use the folderId from the placeholder check above
                 const overwriteIndex = saved.findIndex(item =>
                     item.fileName === finalFileName &&
+                    (item.folderId ?? null) === currentFolderId &&
                     item.status !== 'processing'
                 );
                 if (overwriteIndex !== -1) {
@@ -2714,6 +2924,10 @@ async function analyzeProject(projectId) {
                     }
                     if (saved[overwriteIndex].isFavorite !== undefined) {
                         isFavorite = saved[overwriteIndex].isFavorite;
+                    }
+                    // Preserve folderId from existing entry
+                    if (saved[overwriteIndex].folderId !== undefined) {
+                        currentFolderId = saved[overwriteIndex].folderId;
                     }
                 }
             }
@@ -2731,7 +2945,8 @@ async function analyzeProject(projectId) {
                 analysis: analysisData,
                 chatHistory: state.currentChatHistory,
                 subtitleData: state.currentSubtitleData,
-                isFavorite: isFavorite
+                isFavorite: isFavorite,
+                folderId: currentFolderId // Preserve folderId from placeholder or existing entry
             };
             
             // Validate analysis data before saving
@@ -2757,15 +2972,18 @@ async function analyzeProject(projectId) {
                     });
                     saved[placeholderIndex] = completedAnalysis;
                 } else {
-                    // Placeholder not found - check for duplicate to overwrite
+                    // Placeholder not found - check for duplicate to overwrite (consider folderId)
+                    const completedFolderId = completedAnalysis.folderId ?? null;
                     const overwriteIndex = saved.findIndex(item =>
                         item.fileName === finalFileName &&
+                        (item.folderId ?? null) === completedFolderId &&
                         item.status !== 'processing'
                     );
                     if (overwriteIndex !== -1) {
                         // Overwrite duplicate
                         debugLog('🔄 DUPLICATE OVERWRITTEN', {
                             fileName: finalFileName,
+                            folderId: completedFolderId,
                             oldItemId: saved[overwriteIndex].id,
                             newItemId: completedAnalysis.id
                         });
@@ -2774,21 +2992,25 @@ async function analyzeProject(projectId) {
                         // Create new entry
                         debugLog('➕ NEW ANALYSIS CREATED', {
                             itemId: completedAnalysis.id,
-                            fileName: finalFileName
+                            fileName: finalFileName,
+                            folderId: completedFolderId
                         });
                         saved.push(completedAnalysis);
                     }
                 }
             } else {
-                // No placeholder - check for duplicate to overwrite
+                // No placeholder - check for duplicate to overwrite (consider folderId)
+                const completedFolderId = completedAnalysis.folderId ?? null;
                 const overwriteIndex = saved.findIndex(item =>
                     item.fileName === finalFileName &&
+                    (item.folderId ?? null) === completedFolderId &&
                     item.status !== 'processing'
                 );
                 if (overwriteIndex !== -1) {
                     // Overwrite duplicate
                     debugLog('🔄 DUPLICATE OVERWRITTEN', {
                         fileName: finalFileName,
+                        folderId: completedFolderId,
                         oldItemId: saved[overwriteIndex].id,
                         newItemId: completedAnalysis.id
                     });
@@ -2797,7 +3019,8 @@ async function analyzeProject(projectId) {
                     // Create new entry
                     debugLog('➕ NEW ANALYSIS CREATED', {
                         itemId: completedAnalysis.id,
-                        fileName: finalFileName
+                        fileName: finalFileName,
+                        folderId: completedFolderId
                     });
                     saved.push(completedAnalysis);
                 }
@@ -3809,9 +4032,12 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             // Get existing saved analyses
             let saved = await fetchSavedAnalyses('manual-save');
             
-            // Check for duplicate filename before saving
+            // Check for duplicate filename before saving (consider folderId to allow same name in different folders)
+            // Manual save doesn't set folderId, so it will be null/undefined
+            const savedAnalysisFolderId = savedAnalysis.folderId ?? null;
             const duplicateIndex = saved.findIndex(item =>
                 item.fileName === savedAnalysis.fileName &&
+                (item.folderId ?? null) === savedAnalysisFolderId &&
                 item.status !== 'processing' && // Only check completed analyses
                 item.analysis // Must have analysis data
             );
@@ -3844,7 +4070,7 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                 }
             } else {
                 // No duplicate - add new entry
-                saved.push(savedAnalysis);
+            saved.push(savedAnalysis);
             }
             
             // Keep only last 50 analyses
@@ -3911,28 +4137,34 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                 e.preventDefault();
                 e.stopPropagation();
             }
-            console.log('🔥 Saved Analyses button clicked - handler fired!');
-            debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
-                isAnalyzing: state.isAnalyzing,
-                hasCurrentAnalysis: !!state.currentAnalysis,
-                projectCount: state.fileProjects.length
-            });
-
-            // Show warning if analysis is in progress
-            if (state.isAnalyzing) {
-                debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
-                    showingConfirmDialog: true,
-                    currentProjectId: state.currentProjectId
-                });
-                const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
-                if (!confirmLeave) {
-                    debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
-                    return;
-                }
-                debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
+            // Prevent double-firing
+            if (handleSavedAnalysesClick.processing) {
+                debugLog('⚠️ SAVED ANALYSES CLICK ALREADY PROCESSING', {}, 'warn');
+                return;
             }
-            
-            isEditMode = false; // Reset edit mode when opening
+            handleSavedAnalysesClick.processing = true;
+            console.log('🔥 Saved Analyses button clicked - handler fired!');
+        debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
+            isAnalyzing: state.isAnalyzing,
+            hasCurrentAnalysis: !!state.currentAnalysis,
+            projectCount: state.fileProjects.length
+        });
+
+        // Show warning if analysis is in progress
+        if (state.isAnalyzing) {
+            debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
+                showingConfirmDialog: true,
+                currentProjectId: state.currentProjectId
+            });
+            const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
+            if (!confirmLeave) {
+                debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
+                return;
+            }
+            debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
+        }
+        
+        isEditMode = false; // Reset edit mode when opening
             
             // Show the view first
             if (!savedAnalysesView) {
@@ -3955,13 +4187,18 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             // Also use viewManager
             viewManager.showSavedAnalyses();
             
-            await loadSavedAnalyses();
-            if (editSavedBtn) {
-                updateEditButton();
-            }
+        await loadSavedAnalyses();
+        if (editSavedBtn) {
+            updateEditButton();
+        }
             console.log('Saved analyses view should now be visible');
-            // Note: Analysis continues in background if in progress
-            // Progress will be visible when returning to home window
+        // Note: Analysis continues in background if in progress
+        // Progress will be visible when returning to home window
+        
+        // Reset processing flag after a short delay
+        setTimeout(() => {
+            handleSavedAnalysesClick.processing = false;
+        }, 1000);
         };
         
         // Attach event listener
@@ -3970,7 +4207,7 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
         // Also set onclick as backup
         savedAnalysesBtn.onclick = handleSavedAnalysesClick;
         
-        // Right-click on empty space in saved analyses view to create folder
+        // Right-click on empty space in saved analyses view to show context menu with "Create Folder" only
         if (activeSavesSection) {
             activeSavesSection.addEventListener('contextmenu', async (e) => {
                 // Only if clicking on the section itself, not on items
@@ -3979,7 +4216,8 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                     e.target === activeSavesCards) {
                     e.preventDefault();
                     e.stopPropagation();
-                    await showCreateFolderModal();
+                    // Show context menu with only "Create Folder" option
+                    await showContextMenu(e, null);
                 }
             });
         }
@@ -4197,8 +4435,25 @@ async function updateSavedItemStatusFromPause(itemId, paused) {
     }
 }
 
-async function loadSavedAnalyses() {
+// Define loadSavedAnalyses function (forward declared earlier)
+loadSavedAnalyses = async function() {
     debugLog('📂 LOADING SAVED ANALYSES', { timestamp: new Date().toISOString() });
+
+    // Wait for startup cleanup to complete if it hasn't finished yet
+    // This prevents duplicates from showing when user clicks "Saved Analyses" immediately after startup
+    if (!startupCleanupComplete) {
+        if (startupCleanupPromise) {
+            debugLog('⏳ WAITING FOR STARTUP CLEANUP', {}, 'info');
+            await startupCleanupPromise;
+        } else {
+            // If promise doesn't exist yet, wait a bit and check again
+            debugLog('⏳ STARTUP CLEANUP PROMISE NOT SET, WAITING...', {}, 'info');
+            await new Promise(resolve => setTimeout(resolve, 100));
+            if (startupCleanupPromise && !startupCleanupComplete) {
+                await startupCleanupPromise;
+            }
+        }
+    }
 
     let saved = [];
     try {
@@ -4347,67 +4602,210 @@ async function loadSavedAnalyses() {
         return true;
     });
     
-    // Apply folder filter if active
-    let filteredActive = activeItems;
-    if (currentFolderFilter !== null) {
-        filteredActive = activeItems.filter(item => item.folderId === currentFolderFilter);
-    }
-    
     // Helper function to get date for sorting/comparison (prioritize dateEdited, fallback to dateCreated, then date)
     const getDateForItem = (item) => {
         return item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
     };
     
     // For active items: filter duplicates - keep only the latest version of each fileName
+    // IMPORTANT: Use fileName + folderId as key to allow same filename in different folders
+    // CRITICAL: Run deduplication on ALL activeItems first, before any folder filtering
     const fileMap = new Map();
+    const duplicateIdsToRemove = new Set(); // Track IDs of duplicates to remove from saved data
+    
+    // Normalize folderId to ensure consistent comparison (undefined, null, and missing all become null)
+    const normalizeFolderId = (item) => {
+        if (item.type === 'folder') return item.id; // Folders use their own ID
+        // CRITICAL: Convert to string to ensure consistent comparison
+        // This handles cases where folderId might be a number vs string
+        const folderId = item.folderId;
+        if (folderId === undefined || folderId === null) return null;
+        return String(folderId); // Convert to string for consistent comparison
+    };
+    
+    // Normalize fileName for comparison (trim whitespace, handle empty strings)
+    const normalizeFileName = (fileName) => {
+        if (!fileName || typeof fileName !== 'string') return '';
+        return fileName.trim();
+    };
+    
+    // Log all activeItems for debugging
+    debugLog('🔍 DEDUPLICATION CHECK', {
+        activeItemsCount: activeItems.length,
+        activeItems: activeItems.map(item => ({
+            id: item.id,
+            fileName: item.fileName,
+            folderId: item.folderId,
+            dateEdited: item.dateEdited,
+            dateCreated: item.dateCreated
+        }))
+    });
+    
     activeItems.forEach(item => {
-        const fileName = item.fileName;
-        if (!fileName) return; // Skip items without fileName
+        const fileName = normalizeFileName(item.fileName);
+        if (!fileName) {
+            debugLog('⚠️ SKIPPING ITEM WITHOUT FILENAME', { itemId: item.id }, 'warn');
+            return; // Skip items without fileName
+        }
+        
+        // Create unique key: fileName + folderId (normalized)
+        const folderId = normalizeFolderId(item);
+        const uniqueKey = `${fileName}::${folderId}`;
+        
+        // CRITICAL: Log the unique key to verify it's being created correctly
+        debugLog('🔑 CHECKING UNIQUE KEY', { 
+            itemId: item.id, 
+            fileName, 
+            folderId, 
+            uniqueKey,
+            folderIdType: typeof folderId,
+            folderIdValue: folderId
+        });
         
         const itemDate = new Date(getDateForItem(item));
         
-        if (!fileMap.has(fileName)) {
-            fileMap.set(fileName, item);
+        if (!fileMap.has(uniqueKey)) {
+            fileMap.set(uniqueKey, item);
+            debugLog('✅ ADDED TO FILEMAP', { uniqueKey, itemId: item.id, fileName, folderId });
         } else {
-            const existing = fileMap.get(fileName);
+            const existing = fileMap.get(uniqueKey);
             const existingDate = new Date(getDateForItem(existing));
+            
+            // Determine which item to keep
+            let keepExisting = true;
             
             // Prioritize items with analysis data if dates are equal or if existing has no analysis
             if (!existing.analysis && item.analysis) {
-                fileMap.set(fileName, item);
+                keepExisting = false;
             } else if (itemDate > existingDate && item.analysis) {
-                fileMap.set(fileName, item);
+                keepExisting = false;
+            } else if (itemDate > existingDate && existing.analysis && item.analysis) {
+                // If both have analysis, prefer the newer one
+                keepExisting = false;
+            }
+            
+            if (keepExisting) {
+                // Keep existing, mark current item as duplicate
+                duplicateIdsToRemove.add(item.id);
+                debugLog('🔍 DUPLICATE DETECTED (keeping existing)', {
+                    uniqueKey,
+                    fileName,
+                    folderId,
+                    existingId: existing.id,
+                    duplicateId: item.id,
+                    existingDate: getDateForItem(existing),
+                    duplicateDate: getDateForItem(item)
+                }, 'warn');
+            } else {
+                // Keep current item, mark existing as duplicate
+                duplicateIdsToRemove.add(existing.id);
+                fileMap.set(uniqueKey, item);
+                debugLog('🔍 DUPLICATE DETECTED (keeping newer)', {
+                    uniqueKey,
+                    fileName,
+                    folderId,
+                    existingId: existing.id,
+                    keptId: item.id,
+                    existingDate: getDateForItem(existing),
+                    keptDate: getDateForItem(item)
+                }, 'warn');
             }
         }
     });
     
-    // Convert active items map to array (will be sorted by sortActiveSaves function)
-    // Note: filteredActive is already set above if folder filter is active
-    if (currentFolderFilter === null) {
-        filteredActive = Array.from(fileMap.values());
-    } else {
-        // Re-apply deduplication to filtered items
-        const filteredMap = new Map();
-        filteredActive.forEach(item => {
-            const fileName = item.fileName;
-            if (!fileName) return;
-            
-            const itemDate = new Date(getDateForItem(item));
-            
-            if (!filteredMap.has(fileName)) {
-                filteredMap.set(fileName, item);
-            } else {
-                const existing = filteredMap.get(fileName);
-                const existingDate = new Date(getDateForItem(existing));
+    // Remove duplicates from saved data if any were found
+    if (duplicateIdsToRemove.size > 0) {
+        debugLog('🧹 REMOVING DUPLICATES FROM SAVED DATA', {
+            duplicateCount: duplicateIdsToRemove.size,
+            duplicateIds: Array.from(duplicateIdsToRemove),
+            totalItemsBefore: saved.length
+        }, 'warn');
+        
+        // Remove duplicates from saved array (including folders and inactive items)
+        const originalLength = saved.length;
+        saved = saved.filter(item => !duplicateIdsToRemove.has(item.id));
+        const removedCount = originalLength - saved.length;
+        
+        if (removedCount > 0) {
+            // Save cleaned data back
+            try {
+                await saveAnalysesSafe(saved);
+                debugLog('✅ DUPLICATES REMOVED AND SAVED', {
+                    removedCount: removedCount,
+                    remainingCount: saved.length,
+                    duplicateIds: Array.from(duplicateIdsToRemove)
+                }, 'success');
                 
-                if (!existing.analysis && item.analysis) {
-                    filteredMap.set(fileName, item);
-                } else if (itemDate > existingDate && item.analysis) {
-                    filteredMap.set(fileName, item);
-                }
+                // IMPORTANT: Reload the data after saving to ensure we're working with cleaned data
+                // This prevents issues where duplicates might still be in memory
+                saved = await fetchSavedAnalyses('reload-after-dedup');
+                
+                // Re-filter activeItems with the cleaned data
+                activeItems = saved.filter(item => {
+                    if (item.type === 'folder') return false;
+                    if (!item.analysis) return false;
+                    if (item.status === 'processing') return false;
+                    if (!item.fileName) return false;
+                    return true;
+                });
+                
+                // Re-run deduplication on the cleaned activeItems to update fileMap
+                fileMap.clear();
+                activeItems.forEach(item => {
+                    const fileName = normalizeFileName(item.fileName);
+                    if (!fileName) return;
+                    const folderId = normalizeFolderId(item);
+                    const uniqueKey = `${fileName}::${folderId}`;
+                    if (!fileMap.has(uniqueKey)) {
+                        fileMap.set(uniqueKey, item);
+                    }
+                });
+                
+                debugLog('🔄 DATA RELOADED AFTER DEDUPLICATION', {
+                    activeItemsCount: activeItems.length,
+                    uniqueItemsCount: fileMap.size
+                }, 'info');
+            } catch (error) {
+                console.error('Error saving cleaned data:', error);
+                debugLog('❌ ERROR SAVING CLEANED DATA', { error: error.message }, 'error');
             }
+        }
+    }
+    
+    // Apply folder filter AFTER deduplication
+    // Convert deduplicated items to array and filter by folder if needed
+    const deduplicatedItems = Array.from(fileMap.values());
+    debugLog('📊 DEDUPLICATION RESULTS', {
+        activeItemsBefore: activeItems.length,
+        deduplicatedItemsCount: deduplicatedItems.length,
+        fileMapSize: fileMap.size,
+        duplicatesRemoved: duplicateIdsToRemove.size
+    });
+    
+    let filteredActive = deduplicatedItems;
+    if (currentFolderFilter !== null) {
+        // When viewing a specific folder, only show files in that folder
+        filteredActive = deduplicatedItems.filter(item => 
+            (item.folderId ?? null) === currentFolderFilter
+        );
+        debugLog('📁 FOLDER FILTER APPLIED', {
+            folderId: currentFolderFilter,
+            totalItems: deduplicatedItems.length,
+            filteredItems: filteredActive.length
         });
-        filteredActive = Array.from(filteredMap.values());
+    } else {
+        // When showing all files (currentFolderFilter === null), show only files NOT in any folder
+        // Files in folders should only appear when viewing that specific folder
+        // This matches the requirement: "all the files should show up in the list without folders as folders"
+        filteredActive = deduplicatedItems.filter(item => 
+            (item.folderId ?? null) === null
+        );
+        debugLog('📁 SHOWING FILES NOT IN FOLDERS', {
+            totalItems: deduplicatedItems.length,
+            itemsInFolders: deduplicatedItems.filter(item => (item.folderId ?? null) !== null).length,
+            itemsNotInFolders: deduplicatedItems.filter(item => (item.folderId ?? null) === null).length,
+            filteredActiveCount: filteredActive.length
+        });
     }
     
     // Sort inactive items by date (newest first)
@@ -4461,14 +4859,14 @@ async function loadSavedAnalyses() {
     
     // Setup sorting handlers (only for list view)
     if (savedViewMode === 'list') {
-        setupSorting();
+    setupSorting();
     }
     
     // Update view toggle buttons
     updateViewToggleButtons();
     
     return; // Exit early - rendering is done in separate functions
-}
+};
 
 // Helper function to render folder breadcrumb
 function renderFolderBreadcrumb() {
@@ -4630,6 +5028,10 @@ function renderActiveSaves(activeItems, folders = []) {
             folderItem.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                // Set data in dragover for Electron compatibility
+                if (draggedItemId) {
+                    e.dataTransfer.setData('text/plain', draggedItemId);
+                }
                 e.dataTransfer.dropEffect = 'move';
                 folderItem.classList.add('drag-over');
             });
@@ -4645,9 +5047,24 @@ function renderActiveSaves(activeItems, folders = []) {
                 e.stopPropagation();
                 folderItem.classList.remove('drag-over');
                 
-                const fileId = e.dataTransfer.getData('text/plain');
+                // Get file ID from dataTransfer or fallback to stored draggedItemId (Electron compatibility)
+                // In Electron, getData might return empty string, so we use draggedItemId as fallback
+                let fileId = e.dataTransfer.getData('text/plain');
+                if (!fileId || fileId === '') {
+                    fileId = draggedItemId;
+                }
+                debugLog('🎯 DROP EVENT (LIST)', { 
+                    dataTransferValue: e.dataTransfer.getData('text/plain'),
+                    draggedItemId: draggedItemId,
+                    finalFileId: fileId,
+                    folderId: folder.id
+                });
                 if (fileId) {
-                    await assignFileToFolder(fileId, folder.id);
+                    debugLog('🔄 CALLING assignFileToFolder', { fileId, folderId: folder.id }, 'info');
+                    const result = await assignFileToFolder(fileId, folder.id);
+                    debugLog('✅ assignFileToFolder RESULT', { result, fileId, folderId: folder.id }, result.success ? 'success' : 'error');
+                } else {
+                    debugLog('❌ DROP FAILED - NO FILE ID', {}, 'error');
                 }
             });
             
@@ -4718,7 +5135,7 @@ function renderActiveSaves(activeItems, folders = []) {
             `;
             
         // Add click handler for name span - just open analysis
-        const nameSpan = savedItem.querySelector('.saved-item-name');
+            const nameSpan = savedItem.querySelector('.saved-item-name');
         if (nameSpan) {
             nameSpan.addEventListener('click', (e) => {
                 e.stopPropagation(); // Prevent savedItem click handler from firing
@@ -4759,13 +5176,16 @@ function renderActiveSaves(activeItems, folders = []) {
         
         // Add drag-and-drop handlers
         savedItem.addEventListener('dragstart', (e) => {
+            draggedItemId = item.id; // Store for Electron compatibility
             e.dataTransfer.setData('text/plain', item.id);
             e.dataTransfer.effectAllowed = 'move';
             savedItem.classList.add('dragging');
+            debugLog('🎯 DRAG START (LIST)', { itemId: item.id, fileName: item.fileName, draggedItemId: draggedItemId });
         });
         
         savedItem.addEventListener('dragend', (e) => {
             savedItem.classList.remove('dragging');
+            draggedItemId = null; // Reset after drag ends
             // Remove drag-over class from all folders
             document.querySelectorAll('.saved-item-folder').forEach(f => {
                 f.classList.remove('drag-over');
@@ -4843,9 +5263,9 @@ async function showRenameUploadModal(item) {
             !imagePreviewPlaceholder || !renameUploadCancel || !renameUploadSave) {
             console.error('Rename/Upload modal elements not found');
             resolve();
-            return;
-        }
-        
+                return;
+            }
+            
         // Set initial values
         renameUploadInput.value = item.fileName || '';
         let selectedImageFile = null;
@@ -4899,8 +5319,8 @@ async function showRenameUploadModal(item) {
             if (file) {
                 if (!file.type.startsWith('image/')) {
                     showWarningModal('Please select an image file.');
-                    return;
-                }
+                return;
+            }
                 selectedImageFile = file;
                 const reader = new FileReader();
                 reader.onload = (event) => {
@@ -5010,7 +5430,7 @@ async function showRenameUploadModal(item) {
                 // Update file name
                 if (sanitizedName !== item.fileName) {
                     saved[index].fileName = sanitizedName;
-                    saved[index].dateEdited = new Date().toISOString();
+                        saved[index].dateEdited = new Date().toISOString();
                 }
                 
                 // Handle image upload
@@ -5022,7 +5442,7 @@ async function showRenameUploadModal(item) {
                         const result = await electronBridge.savePreviewImage(item.id, imageData);
                         if (result.success) {
                             saved[index].thumbnailPath = result.path;
-                            await saveAnalysesSafe(saved);
+                    await saveAnalysesSafe(saved);
                             
                             // Small delay to ensure file is fully written and accessible
                             await new Promise(resolve => setTimeout(resolve, 100));
@@ -5073,7 +5493,7 @@ async function showRenameUploadModal(item) {
                             }
                             
                             // Reload saved analyses to update the list
-                            await loadSavedAnalyses();
+                await loadSavedAnalyses();
                             
                             renameUploadModal.style.display = 'none';
                             document.removeEventListener('keydown', handleEscape);
@@ -5108,7 +5528,7 @@ async function showRenameUploadModal(item) {
                     await showWarningModal('File updated successfully!');
                     resolve();
                 }
-            } catch (error) {
+                    } catch (error) {
                 console.error('Error saving rename/upload:', error);
                 await showWarningModal('Error updating file: ' + error.message);
             }
@@ -5177,6 +5597,49 @@ async function showContextMenu(event, item) {
     // Hide context menu first
     hideContextMenu();
     
+    // Handle empty space click (item is null)
+    if (item === null) {
+        // Show only "Create Folder" option for empty space
+        contextMenu.innerHTML = `
+            <div class="context-menu-item" data-action="new-folder">
+                <span>Create Folder</span>
+            </div>
+        `;
+        
+        // Position menu
+        const x = event.clientX;
+        const y = event.clientY;
+        contextMenu.style.left = `${x}px`;
+        contextMenu.style.top = `${y}px`;
+        contextMenu.style.display = 'block';
+        
+        // Handle menu item clicks
+        contextMenu.addEventListener('click', async (e) => {
+            const menuItem = e.target.closest('.context-menu-item');
+            if (!menuItem) return;
+            
+            const action = menuItem.dataset.action;
+            if (action === 'new-folder') {
+                hideContextMenu();
+                await showCreateFolderModal();
+            }
+        });
+        
+        // Hide menu when clicking outside
+        const hideOnClickOutside = (e) => {
+            if (!contextMenu.contains(e.target)) {
+                hideContextMenu();
+                document.removeEventListener('click', hideOnClickOutside);
+            }
+        };
+        
+        setTimeout(() => {
+            document.addEventListener('click', hideOnClickOutside);
+        }, 0);
+        
+        return;
+    }
+    
     const isFolder = item.type === 'folder';
     const saved = await fetchSavedAnalyses('context-menu');
     const folders = saved.filter(i => i.type === 'folder');
@@ -5219,12 +5682,12 @@ async function showContextMenu(event, item) {
         `;
     }
     
-    // Add "New Folder" option for empty space or file menu
+    // Add "Create Folder" option for file menu
     if (!isFolder) {
         menuHtml += `
             <div class="context-menu-separator"></div>
             <div class="context-menu-item" data-action="new-folder">
-                <span>New Folder</span>
+                <span>Create Folder</span>
             </div>
         `;
     }
@@ -5528,7 +5991,7 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
             // Add click handler to filter by folder
             folderCard.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (!isEditMode) {
+            if (!isEditMode) {
                     currentFolderFilter = folder.id;
                     await loadSavedAnalyses();
                 }
@@ -5536,15 +5999,19 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
             
             // Add right-click handler for context menu
             folderCard.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
+                        e.preventDefault();
                 e.stopPropagation();
                 showContextMenu(e, folder);
             });
             
             // Add drag-and-drop handlers for folders (drop targets)
             folderCard.addEventListener('dragover', (e) => {
-                e.preventDefault();
+                        e.preventDefault();
                 e.stopPropagation();
+                // Set data in dragover for Electron compatibility
+                if (draggedItemId) {
+                    e.dataTransfer.setData('text/plain', draggedItemId);
+                }
                 e.dataTransfer.dropEffect = 'move';
                 folderCard.classList.add('drag-over');
             });
@@ -5560,9 +6027,24 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
                 e.stopPropagation();
                 folderCard.classList.remove('drag-over');
                 
-                const fileId = e.dataTransfer.getData('text/plain');
+                // Get file ID from dataTransfer or fallback to stored draggedItemId (Electron compatibility)
+                // In Electron, getData might return empty string, so we use draggedItemId as fallback
+                let fileId = e.dataTransfer.getData('text/plain');
+                if (!fileId || fileId === '') {
+                    fileId = draggedItemId;
+                }
+                debugLog('🎯 DROP EVENT (CARD)', { 
+                    dataTransferValue: e.dataTransfer.getData('text/plain'),
+                    draggedItemId: draggedItemId,
+                    finalFileId: fileId,
+                    folderId: folder.id
+                });
                 if (fileId) {
-                    await assignFileToFolder(fileId, folder.id);
+                    debugLog('🔄 CALLING assignFileToFolder', { fileId, folderId: folder.id }, 'info');
+                    const result = await assignFileToFolder(fileId, folder.id);
+                    debugLog('✅ assignFileToFolder RESULT', { result, fileId, folderId: folder.id }, result.success ? 'success' : 'error');
+                } else {
+                    debugLog('❌ DROP FAILED - NO FILE ID', {}, 'error');
                 }
             });
             
@@ -5570,8 +6052,86 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
         }
     }
     
+    // Deduplicate activeItems right before rendering to ensure no duplicates
+    // This is a safety check in case duplicates somehow made it through
+    // Check both by ID and by fileName+folderId (since duplicates may have different IDs)
+    debugLog('🔍 CARD RENDER DEDUPLICATION START', {
+        activeItemsCount: activeItems.length,
+        activeItems: activeItems.map(item => ({
+            id: item.id,
+            fileName: item.fileName,
+            folderId: item.folderId
+        }))
+    });
+    
+    const seenIds = new Set();
+    const seenKeys = new Map(); // Map of fileName::folderId -> item
+    const uniqueActiveItems = [];
+    
+    for (const item of activeItems) {
+        // Check for duplicate ID
+        if (seenIds.has(item.id)) {
+            debugLog('⚠️ DUPLICATE ITEM ID DETECTED IN CARD RENDER', {
+                itemId: item.id,
+                fileName: item.fileName,
+                folderId: item.folderId
+            }, 'warn');
+            continue;
+        }
+        
+        // Check for duplicate fileName+folderId
+        const fileName = (item.fileName || '').trim();
+        const folderId = item.folderId ?? null;
+        const uniqueKey = `${fileName}::${folderId}`;
+        
+        if (seenKeys.has(uniqueKey)) {
+            const existing = seenKeys.get(uniqueKey);
+            // Keep the one with the newer date
+            const itemDate = new Date(item.dateEdited || item.dateCreated || item.date || new Date());
+            const existingDate = new Date(existing.dateEdited || existing.dateCreated || existing.date || new Date());
+            
+            if (itemDate > existingDate) {
+                // Replace with newer item
+                const index = uniqueActiveItems.indexOf(existing);
+                if (index !== -1) {
+                    uniqueActiveItems[index] = item;
+                    seenIds.delete(existing.id);
+                    seenIds.add(item.id);
+                    seenKeys.set(uniqueKey, item);
+                    debugLog('⚠️ DUPLICATE KEY DETECTED IN CARD RENDER - REPLACING WITH NEWER', {
+                        fileName,
+                        folderId,
+                        oldId: existing.id,
+                        newId: item.id
+                    }, 'warn');
+                }
+        } else {
+                debugLog('⚠️ DUPLICATE KEY DETECTED IN CARD RENDER - SKIPPING OLDER', {
+                    fileName,
+                    folderId,
+                    existingId: existing.id,
+                    skippedId: item.id
+                }, 'warn');
+            }
+            continue;
+        }
+        
+        // Item is unique, add it
+        seenIds.add(item.id);
+        seenKeys.set(uniqueKey, item);
+        uniqueActiveItems.push(item);
+    }
+    
+    if (uniqueActiveItems.length !== activeItems.length) {
+        debugLog('🔍 CARD RENDER DEDUPLICATION', {
+            originalCount: activeItems.length,
+            uniqueCount: uniqueActiveItems.length,
+            removedCount: activeItems.length - uniqueActiveItems.length
+        }, 'warn');
+    }
+    
     // Sort active items based on current sort settings
-    const sorted = sortActiveSaves(activeItems);
+    const sorted = sortActiveSaves(uniqueActiveItems);
     
     for (const item of sorted) {
         // Validate analysis data before rendering
@@ -5583,7 +6143,7 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
                     fileName: item.fileName,
                     error: validation.error
                 }, 'warn');
-                return;
+                continue; // Use continue instead of return to skip this item
             }
         }
         
@@ -5620,7 +6180,7 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
                 const cacheBustUrl = `${fileUrl}?t=${Date.now()}`;
                 thumbnailHtml = `<img src="${cacheBustUrl}" class="saved-card-thumbnail" alt="Preview" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`;
                 placeholderHtml = `<div class="saved-card-thumbnail-placeholder" style="display: none;">No Preview</div>`;
-            } else {
+        } else {
                 placeholderHtml = `<div class="saved-card-thumbnail-placeholder">No Preview</div>`;
             }
         } else {
@@ -5660,13 +6220,16 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
         
         // Add drag-and-drop handlers
         card.addEventListener('dragstart', (e) => {
+            draggedItemId = item.id; // Store for Electron compatibility
             e.dataTransfer.setData('text/plain', item.id);
             e.dataTransfer.effectAllowed = 'move';
             card.classList.add('dragging');
+            debugLog('🎯 DRAG START (CARD)', { itemId: item.id, fileName: item.fileName, draggedItemId: draggedItemId });
         });
         
         card.addEventListener('dragend', (e) => {
             card.classList.remove('dragging');
+            draggedItemId = null; // Reset after drag ends
             // Remove drag-over class from all folders
             document.querySelectorAll('.saved-card-folder').forEach(f => {
                 f.classList.remove('drag-over');
@@ -5702,7 +6265,7 @@ async function renderActiveSavesAsCards(activeItems, folders = []) {
                     if (savedItem) {
                         savedItem.isFavorite = !savedItem.isFavorite;
                         await saveAnalysesSafe(saved);
-                        await loadSavedAnalyses();
+                            await loadSavedAnalyses();
                     }
                 } catch (error) {
                     console.error('Error toggling favorite:', error);
@@ -7668,30 +8231,107 @@ async function cleanupUnfinishedFiles() {
 }
 
 // Cleanup inactive saves on startup (per spec: inactive saves are temporary, cleared on restart)
+// Also runs deduplication to ensure no duplicates persist
 async function cleanupInactiveSavesOnStartup() {
     try {
         debugLog('🚀 STARTUP CLEANUP INITIATED', {}, 'info');
         
         let saved = await fetchSavedAnalyses('startup-cleanup');
+        const originalCount = saved.length;
         
         // Remove all processing items (inactive saves should not persist across restarts)
         // Safe: only removes items with status === 'processing' (inactive saves)
         // Active saves don't have status field, so they're preserved
-        const cleanedSaved = saved.filter(item => item.status !== 'processing');
+        let cleanedSaved = saved.filter(item => item.status !== 'processing');
         
-        if (cleanedSaved.length !== saved.length) {
+        // Also run deduplication on startup to catch any duplicates
+        const activeItems = cleanedSaved.filter(item => {
+            if (item.type === 'folder') return false;
+            if (!item.analysis) return false;
+            if (item.status === 'processing') return false;
+            if (!item.fileName) return false;
+            return true;
+        });
+        
+        // Normalize functions (same as in loadSavedAnalyses)
+        const normalizeFolderId = (item) => {
+            if (item.type === 'folder') return item.id;
+            return item.folderId === undefined || item.folderId === null ? null : item.folderId;
+        };
+        const normalizeFileName = (fileName) => {
+            if (!fileName || typeof fileName !== 'string') return '';
+            return fileName.trim();
+        };
+        const getDateForItem = (item) => {
+            return item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
+        };
+        
+        // Deduplicate active items
+        const fileMap = new Map();
+        const duplicateIdsToRemove = new Set();
+        
+        activeItems.forEach(item => {
+            const fileName = normalizeFileName(item.fileName);
+            if (!fileName) return;
+            
+            const folderId = normalizeFolderId(item);
+            const uniqueKey = `${fileName}::${folderId}`;
+            const itemDate = new Date(getDateForItem(item));
+            
+            if (!fileMap.has(uniqueKey)) {
+                fileMap.set(uniqueKey, item);
+            } else {
+                const existing = fileMap.get(uniqueKey);
+                const existingDate = new Date(getDateForItem(existing));
+                
+                let keepExisting = true;
+                if (!existing.analysis && item.analysis) {
+                    keepExisting = false;
+                } else if (itemDate > existingDate && item.analysis) {
+                    keepExisting = false;
+                } else if (itemDate > existingDate && existing.analysis && item.analysis) {
+                    keepExisting = false;
+                }
+                
+                if (keepExisting) {
+                    duplicateIdsToRemove.add(item.id);
+                } else {
+                    duplicateIdsToRemove.add(existing.id);
+                    fileMap.set(uniqueKey, item);
+                }
+            }
+        });
+        
+        // Remove duplicates from cleaned saved array
+        if (duplicateIdsToRemove.size > 0) {
+            cleanedSaved = cleanedSaved.filter(item => !duplicateIdsToRemove.has(item.id));
+            debugLog('🔍 STARTUP DEDUPLICATION', {
+                duplicatesRemoved: duplicateIdsToRemove.size,
+                duplicateIds: Array.from(duplicateIdsToRemove)
+            }, 'warn');
+        }
+        
+        // Save if anything changed
+        if (cleanedSaved.length !== originalCount) {
             await saveAnalysesSafe(cleanedSaved);
                 debugLog('🧹 STARTUP CLEANUP COMPLETED', {
-                    removedCount: saved.length - cleanedSaved.length,
+                removedCount: originalCount - cleanedSaved.length,
                     remainingCount: cleanedSaved.length,
-                    reason: 'Inactive saves are temporary and cleared on restart (per spec)'
+                inactiveRemoved: saved.length - saved.filter(item => item.status !== 'processing').length,
+                duplicatesRemoved: duplicateIdsToRemove.size,
+                reason: 'Inactive saves cleared and duplicates removed on restart'
                 }, 'success');
         } else {
-            debugLog('✅ NO INACTIVE SAVES TO CLEANUP', {}, 'info');
+            debugLog('✅ NO CLEANUP NEEDED ON STARTUP', {}, 'info');
         }
+        
+        // Mark cleanup as complete
+        startupCleanupComplete = true;
     } catch (error) {
         debugLog('❌ STARTUP CLEANUP ERROR', { error: error.message }, 'error');
         console.error('Error during startup cleanup:', error);
+        // Still mark as complete to prevent infinite waiting
+        startupCleanupComplete = true;
     }
 }
 

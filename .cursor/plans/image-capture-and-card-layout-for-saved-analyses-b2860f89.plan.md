@@ -1,172 +1,71 @@
-<!-- b2860f89-4d27-450e-85fc-5f8b1c4c8725 95d341fd-7286-4e47-9445-2ed3577b85df -->
-# Folder Organization Feature
+<!-- b2860f89-4d27-450e-85fc-5f8b1c4c8725 35a13eee-bca7-495c-869a-3f9337f62bc6 -->
+# Fix Duplicates on Restart and Drag-and-Drop Issues
 
-## Overview
+## Issue 1: Duplicates Temporarily Show on Restart
 
-Add folder organization to saved analyses. Folders appear as special items at the top of the list/cards with distinct UI. Clicking a folder filters to show only its contents. Users can create folders via right-click, assign files via drag-and-drop or context menu, and manage folders (rename, delete).
+**Root Cause**: `cleanupInactiveSavesOnStartup()` runs asynchronously without awaiting. When user clicks "Saved Analyses" button immediately after startup, `loadSavedAnalyses()` loads data before deduplication completes, causing duplicates to appear temporarily.
 
-## Data Structure Changes
+**Solution**:
 
-### Folder Item Structure
+- Ensure `cleanupInactiveSavesOnStartup()` completes before allowing `loadSavedAnalyses()` to proceed on first load
+- Add a flag to track if startup cleanup has completed
+- Make `loadSavedAnalyses()` wait for startup cleanup if it hasn't completed yet
+- Alternatively, ensure startup cleanup runs synchronously before any UI interactions
 
-Folders are stored as special items in `saved_analyses.json`:
+**Files to modify**:
 
-```javascript
-{
-  id: string,              // Unique folder ID
-  type: 'folder',          // Identifies this as a folder
-  folderName: string,      // Folder display name
-  dateCreated: string,     // ISO timestamp
-  dateEdited: string       // ISO timestamp (updated on rename)
-}
-```
+- `renderer.js`: 
+- Add startup cleanup completion tracking
+- Modify `loadSavedAnalyses()` to await startup cleanup on first load
+- Or modify startup sequence to await cleanup before allowing UI interactions
 
-### File Item Structure
+## Issue 2: Drag-and-Drop Not Working
 
-Add optional `folderId` property to saved analysis items:
+**Root Cause**: In Electron, `e.dataTransfer.getData()` in the `drop` event may return empty string if data wasn't set during `dragover`. The code currently only sets data in `dragstart`, which works in browsers but not reliably in Electron.
 
-```javascript
-{
-  // ... existing properties ...
-  folderId: string | null  // ID of parent folder, null if no folder
-}
-```
+**Solution**:
 
-## Implementation Details
+- Add `e.dataTransfer.setData()` call in `dragover` event handlers for folder drop targets
+- Store the dragged item ID in a variable accessible to both dragstart and dragover
+- Ensure data is set in both `dragstart` and `dragover` events
 
-### 1. Data Management (`renderer.js`)
+**Files to modify**:
 
-- **Add folder storage functions**:
-  - `createFolder(folderName)`: Creates new folder, saves to analyses array
-  - `deleteFolder(folderId)`: Deletes folder, optionally moves files out or deletes them
-  - `renameFolder(folderId, newName)`: Updates folder name and dateEdited
-  - `assignFileToFolder(fileId, folderId)`: Sets file's folderId property
-  - `removeFileFromFolder(fileId)`: Sets file's folderId to null
-- **Update save/load logic**: Ensure folders are saved/loaded with analyses array
-- **Migration**: Add `folderId: null` to existing items without folderId
+- `renderer.js`:
+- In `renderActiveSaves()`: Add `setData` in folder `dragover` handler (around line 4862)
+- In `renderActiveSavesAsCards()`: Add `setData` in folder `dragover` handler (around line 5820)
+- In `addFolderToUI()`: Add `setData` in folder `dragover` handler for list view (around line 240) and card view (around line 324)
+- Store dragged item ID in a way that's accessible to dragover handlers
 
-### 2. View State Management (`renderer.js`)
+**Implementation details**:
 
-- **Add folder filter state**:
-  - `currentFolderFilter: string | null`: Currently selected folder ID, null = show all
-- **Add breadcrumb state**: Track folder navigation path
+- Use a module-level variable or closure to store the dragged item ID
+- Set data in both `dragstart` (on file items) and `dragover` (on folder drop targets)
+- Ensure `getData` in `drop` handler can retrieve the value
 
-### 3. Rendering Updates (`renderer.js`)
+## Implementation Steps
 
-#### `renderActiveSaves()` - List View
+1. **Fix startup deduplication timing**:
 
-- **Separate folders and files**: Filter items by `type === 'folder'` vs regular items
-- **Render folders first**: Sort folders by name, render with `.saved-item-folder` class
-- **Folder UI**: Different styling (folder icon, no dates, clickable to filter)
-- **Filter files**: If `currentFolderFilter` is set, only show files with matching `folderId`
-- **Show files without folders**: If `currentFolderFilter` is null, show all files (including those with `folderId: null`)
+- Add `let startupCleanupComplete = false;` at module level
+- Modify `cleanupInactiveSavesOnStartup()` to set flag when complete
+- Modify `loadSavedAnalyses()` to check flag and await cleanup if needed
+- Or: Make startup cleanup await before continuing in DOMContentLoaded
 
-#### `renderActiveSavesAsCards()` - Card View
+2. **Fix drag-and-drop**:
 
-- **Same separation logic**: Folders first, then filtered files
-- **Folder card UI**: Distinct card styling (`.saved-card-folder` class)
-- **Folder icon**: Use folder SVG icon instead of thumbnail
+- Add module-level variable: `let draggedItemId = null;`
+- In file item `dragstart` handlers: Set `draggedItemId = item.id` and `e.dataTransfer.setData('text/plain', item.id)`
+- In folder `dragover` handlers: Add `e.dataTransfer.setData('text/plain', draggedItemId || '')`
+- In folder `drop` handlers: Use `e.dataTransfer.getData('text/plain')` or fallback to `draggedItemId`
+- Reset `draggedItemId = null` in `dragend` handlers
 
-### 4. Folder Header/Breadcrumb (`index.html`, `renderer.js`)
+## Testing
 
-- **Add breadcrumb section** in `savedAnalysesView`:
-  - Shows "All Files" when no filter
-  - Shows folder name with "Back" button when filtered
-  - Positioned between header and list/cards
-- **Update `loadSavedAnalyses()`**: Render breadcrumb based on `currentFolderFilter`
-
-### 5. Context Menu (`renderer.js`, `index.html`, `styles.css`)
-
-- **Add context menu element** in `index.html`
-- **Right-click handlers**:
-  - On folder: "Rename Folder", "Delete Folder", "Move Files Out"
-  - On file: "Move to Folder" (submenu with folder list), "Remove from Folder"
-  - On empty space: "New Folder"
-- **Context menu functions**:
-  - `showContextMenu(event, item)`: Shows menu at cursor position
-  - `hideContextMenu()`: Hides menu
-  - Handle menu item clicks
-
-### 6. Drag-and-Drop (`renderer.js`, `styles.css`)
-
-- **Make files draggable**: Add `draggable="true"` to file items
-- **Make folders drop targets**: Add drop zone styling to folders
-- **Drag handlers**:
-  - `dragstart`: Store dragged file ID
-  - `dragover`: Prevent default, add visual feedback
-  - `drop`: Assign file to folder
-  - `dragleave`: Remove visual feedback
-- **Visual feedback**: Highlight folder on drag-over
-
-### 7. Folder Management Modals (`renderer.js`, `index.html`, `styles.css`)
-
-- **Create folder modal**: Input for folder name, validation
-- **Rename folder modal**: Pre-filled with current name
-- **Delete folder confirmation**: Ask what to do with files (move out or delete)
-
-### 8. Styling (`styles.css`)
-
-- **Folder items**:
-  - `.saved-item-folder`: Distinct styling (different background, folder icon)
-  - `.saved-card-folder`: Folder card styling
-- **Context menu**:
-  - `.context-menu`: Positioning, styling, animations
-  - `.context-menu-item`: Hover effects, submenu indicators
-- **Drag-and-drop**:
-  - `.drag-over`: Highlight on drag-over
-  - `.dragging`: Style for dragged item
-- **Breadcrumb**:
-  - `.folder-breadcrumb`: Container styling
-  - `.folder-breadcrumb-back`: Back button styling
-
-### 9. Event Handlers (`renderer.js`)
-
-- **Folder click**: Set `currentFolderFilter`, re-render
-- **Breadcrumb "Back"**: Clear `currentFolderFilter`, re-render
-- **Context menu items**: Handle create, rename, delete, move operations
-- **Drag-and-drop events**: Handle file assignment
-
-## Files to Modify
-
-1. **`renderer.js`**:
-
-   - Add folder data management functions
-   - Update `loadSavedAnalyses()` to handle folders
-   - Modify `renderActiveSaves()` and `renderActiveSavesAsCards()` to render folders
-   - Add context menu logic
-   - Add drag-and-drop handlers
-   - Add folder management modals
-   - Add breadcrumb rendering
-
-2. **`index.html`**:
-
-   - Add context menu structure
-   - Add folder breadcrumb section
-   - Add folder management modals
-
-3. **`styles.css`**:
-
-   - Add folder item/card styles
-   - Add context menu styles
-   - Add drag-and-drop visual feedback
-   - Add breadcrumb styles
-
-## Migration Strategy
-
-- On load, add `folderId: null` to existing items without this property
-- Folders can be created immediately, no migration needed for folder data
-
-## Testing Considerations
-
-- Create folder, verify it appears at top
-- Assign file to folder via drag-and-drop
-- Assign file to folder via context menu
-- Click folder to filter view
-- Click "Back" to return to all files
-- Rename folder
-- Delete folder (with and without files)
-- Verify files without folders show normally
-- Test in both list and card views
+- Restart app and immediately click "Saved Analyses" - should not show duplicates
+- Drag file card/item onto folder - should move file into folder
+- Drag file from list view onto folder - should work
+- Drag file from card view onto folder - should work
 
 ### To-dos
 
@@ -179,11 +78,7 @@ Add optional `folderId` property to saved analysis items:
 - [ ] Add CSS styles for card grid layout, card items, and thumbnails
 - [ ] Add renderActiveSavesAsCards() function and view toggle functionality
 - [ ] Add localStorage persistence for view mode preference
-- [ ] Add folder data structure: create folder items with type:folder, add folderId to file items, update save/load logic
-- [ ] Update renderActiveSaves() and renderActiveSavesAsCards() to separate and render folders first with distinct UI
-- [ ] Implement folder filtering: add currentFolderFilter state, filter files by folderId when folder is clicked
-- [ ] Add breadcrumb/header section showing current folder or All Files with Back button
-- [ ] Implement right-click context menu: create folder, rename/delete folder, move file to folder, remove from folder
-- [ ] Implement drag-and-drop: make files draggable, folders drop targets, visual feedback, assign file to folder on drop
-- [ ] Add modals for create folder, rename folder, and delete folder confirmation
-- [ ] Add CSS styles for folder items/cards, context menu, drag-and-drop feedback, and breadcrumb
+- [ ] Add startup cleanup completion tracking and ensure loadSavedAnalyses waits for cleanup on first load
+- [ ] Add dataTransfer.setData in dragover handlers and store draggedItemId for Electron compatibility
+- [ ] Test that duplicates do not appear on restart even when clicking Saved Analyses immediately
+- [ ] Test drag-and-drop works in both list and card views for moving files into folders

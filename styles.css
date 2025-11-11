@@ -338,6 +338,8 @@ body.theme-purple {
     display: flex;
     gap: 8px;
     align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
 }
 
 .analyze-project-btn,
@@ -836,9 +838,28 @@ body.theme-purple {
 /* Card Layout Styles */
 .active-saves-cards {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(calc((100% - 120px) / 7), 1fr));
     gap: 20px;
     padding: 8px 0;
+}
+
+/* Responsive grid: show more items on larger screens, minimum 7 per row */
+@media (min-width: 1600px) {
+    .active-saves-cards {
+        grid-template-columns: repeat(auto-fill, minmax(calc((100% - 140px) / 8), 1fr));
+    }
+}
+
+@media (min-width: 1920px) {
+    .active-saves-cards {
+        grid-template-columns: repeat(auto-fill, minmax(calc((100% - 160px) / 9), 1fr));
+    }
+}
+
+@media (min-width: 2560px) {
+    .active-saves-cards {
+        grid-template-columns: repeat(auto-fill, minmax(calc((100% - 180px) / 10), 1fr));
+    }
 }
 
 .saved-card {
@@ -1020,7 +1041,7 @@ body.theme-purple {
 
 .saved-item {
     background-color: var(--bg-secondary);
-    padding: 16px;
+    padding: 8px 16px;
     border-radius: 8px;
     border: 1px solid var(--border-color);
     transition: background-color 0.2s, border-color 0.2s;
@@ -2566,6 +2587,9 @@ body.theme-purple .add-to-list-btn:hover {
     right: 0;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
     padding: 12px;
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+    pointer-events: auto !important;
 }
 
 .saved-card-folder .folder-name {
@@ -2617,19 +2641,21 @@ body.theme-purple .add-to-list-btn:hover {
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     z-index: 10000;
-    min-width: 180px;
-    padding: 4px 0;
+    min-width: 140px;
+    padding: 2px 0;
     display: none;
+    font-size: 13px;
 }
 
 .context-menu-item {
-    padding: 8px 16px;
+    padding: 6px 12px;
     cursor: pointer;
     color: var(--text-primary);
     display: flex;
     align-items: center;
     justify-content: space-between;
     transition: background-color 0.15s;
+    font-size: 13px;
 }
 
 .context-menu-item:hover {
@@ -2653,9 +2679,10 @@ body.theme-purple .add-to-list-btn:hover {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    min-width: 150px;
-    padding: 4px 0;
+    min-width: 120px;
+    padding: 2px 0;
     z-index: 10001;
+    font-size: 13px;
 }
 
 /* Drag and Drop */

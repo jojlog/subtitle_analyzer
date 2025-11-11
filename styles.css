@@ -1045,6 +1045,9 @@ body.theme-purple {
     border-radius: 8px;
     border: 1px solid var(--border-color);
     transition: background-color 0.2s, border-color 0.2s;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
 }
 
 .saved-item-inactive {
@@ -1074,6 +1077,7 @@ body.theme-purple {
     display: flex;
     align-items: flex-start;
     gap: 12px;
+    flex: 1;
 }
 
 .saved-item-checkbox {
@@ -1301,6 +1305,7 @@ body.theme-purple {
     display: flex;
     align-items: flex-start;
     gap: 12px;
+    flex: 1;
 }
 
 .saved-item-checkbox {

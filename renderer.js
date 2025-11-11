@@ -1891,6 +1891,72 @@ ${missingText}`;
             batchData.translations = Array.from(batchTranslationsMap.values());
         }
         
+        // Associate expressions with translation line indices
+        if (batchData.expressions && batchData.expressions.length > 0 && batchData.translations && batchData.translations.length > 0) {
+            // Helper function to check if expression word appears in Swedish text
+            const expressionMatchesTranslation = (expr, swedishText) => {
+                if (!expr.word || !swedishText) return false;
+                
+                const exprWord = expr.word.toLowerCase().trim();
+                // Remove "att " prefix for verbs when checking
+                const wordToCheck = exprWord.startsWith('att ') ? exprWord.substring(4).trim() : exprWord;
+                const swedishLower = swedishText.toLowerCase();
+                
+                // For multi-word phrases, check if all words appear
+                const words = wordToCheck.split(/\s+/).filter(w => w.length > 0);
+                if (words.length > 1) {
+                    // For phrases, all words must appear in order (allowing for punctuation/other words between)
+                    const phrasePattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*?');
+                    const regex = new RegExp(phrasePattern, 'i');
+                    return regex.test(swedishLower);
+                } else {
+                    // For single words, use word boundary matching to ensure it's a complete word
+                    const escapedWord = wordToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    // Match word at start/end of string, or with word boundaries (non-word chars before/after)
+                    const wordBoundaryRegex = new RegExp(`(^|[^\\wåäöÅÄÖ])${escapedWord}([^\\wåäöÅÄÖ]|$)`, 'i');
+                    return wordBoundaryRegex.test(swedishLower);
+                }
+            };
+            
+            // For each expression, find which batch entry(ies) it matches
+            // Match against original batch entries to get correct global indices
+            const expressionsWithIndices = [];
+            batchData.expressions.forEach(expr => {
+                let matchedTranslations = [];
+                
+                // Check against original batch entries to get correct global indices
+                batch.forEach((cue, batchIndex) => {
+                    const cueText = (cue.text || '').trim();
+                    if (cueText && expressionMatchesTranslation(expr, cueText)) {
+                        // Try to find matching translation to get the Swedish text from translation
+                        const matchingTrans = batchData.translations.find(trans => 
+                            textsMatch(trans.swedish || '', cueText)
+                        );
+                        matchedTranslations.push({
+                            translationIndex: globalEntryIndexStart + batchIndex,
+                            swedishText: matchingTrans ? (matchingTrans.swedish || cueText) : cueText
+                        });
+                    }
+                });
+                
+                if (matchedTranslations.length > 0) {
+                    // If expression matches multiple lines, create separate entries for each
+                    matchedTranslations.forEach(match => {
+                        expressionsWithIndices.push({
+                            ...expr,
+                            translationIndex: match.translationIndex,
+                            translationText: match.swedishText
+                        });
+                    });
+                } else {
+                    // If no match found, keep expression without translationIndex (will use word-matching fallback)
+                    expressionsWithIndices.push(expr);
+                }
+            });
+            
+            batchData.expressions = expressionsWithIndices;
+        }
+        
         // Record batch processing time
         const batchEndTime = Date.now();
         const batchDuration = batchEndTime - batchStartTime;
@@ -2787,9 +2853,16 @@ async function analyzeProject(projectId) {
         analysisData.translations = Array.from(translationsMap.values());
         
         // Deduplicate expressions
+        // Use word + translationIndex as key to allow same word in different lines
         const expressionsMap = new Map();
         analysisData.expressions.forEach(expr => {
-            const key = (expr.word && expr.word.toLowerCase()) || '';
+            const wordKey = (expr.word && expr.word.toLowerCase()) || '';
+            const translationIndex = expr.translationIndex !== undefined ? String(expr.translationIndex) : 'none';
+            const key = `${wordKey}::${translationIndex}`;
+            
+            // Keep expression if:
+            // 1. We haven't seen this word+index combination, OR
+            // 2. Existing expression doesn't have meaning but this one does
             if (!expressionsMap.has(key) || !expressionsMap.get(key).meaning) {
                 expressionsMap.set(key, expr);
             }
@@ -4553,6 +4626,90 @@ loadSavedAnalyses = async function() {
             totalItems: saved.length
         });
     }
+    
+    // Migrate expressions: associate existing expressions with their source lines
+    let needsExpressionMigration = false;
+    let expressionMigratedCount = 0;
+    saved = saved.map(item => {
+        // Only migrate items with analysis data and expressions
+        if (!item.analysis || !item.analysis.expressions || !item.analysis.translations) {
+            return item;
+        }
+        
+        const expressions = item.analysis.expressions;
+        const translations = item.analysis.translations;
+        let hasUnmigratedExpressions = false;
+        
+        // Helper function to check if expression word appears in Swedish text
+        const expressionMatchesTranslation = (expr, swedishText) => {
+            if (!expr.word || !swedishText) return false;
+            
+            const exprWord = expr.word.toLowerCase().trim();
+            // Remove "att " prefix for verbs when checking
+            const wordToCheck = exprWord.startsWith('att ') ? exprWord.substring(4).trim() : exprWord;
+            const swedishLower = swedishText.toLowerCase();
+            
+            // For multi-word phrases, check if all words appear
+            const words = wordToCheck.split(/\s+/).filter(w => w.length > 0);
+            if (words.length > 1) {
+                // For phrases, all words must appear in order (allowing for punctuation/other words between)
+                const phrasePattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*?');
+                const regex = new RegExp(phrasePattern, 'i');
+                return regex.test(swedishLower);
+            } else {
+                // For single words, use word boundary matching to ensure it's a complete word
+                const escapedWord = wordToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Match word at start/end of string, or with word boundaries (non-word chars before/after)
+                const wordBoundaryRegex = new RegExp(`(^|[^\\wåäöÅÄÖ])${escapedWord}([^\\wåäöÅÄÖ]|$)`, 'i');
+                return wordBoundaryRegex.test(swedishLower);
+            }
+        };
+        
+        // Migrate expressions that don't have translationIndex
+        const migratedExpressions = expressions.map(expr => {
+            // If expression already has translationIndex, keep it
+            if (expr.translationIndex !== undefined) {
+                return expr;
+            }
+            
+            // Find the first translation that contains this expression
+            for (let i = 0; i < translations.length; i++) {
+                const trans = translations[i];
+                if (trans.swedish && expressionMatchesTranslation(expr, trans.swedish)) {
+                    hasUnmigratedExpressions = true;
+                    expressionMigratedCount++;
+                    return {
+                        ...expr,
+                        translationIndex: i,
+                        translationText: trans.swedish
+                    };
+                }
+            }
+            
+            // If no match found, keep expression without translationIndex (will use word-matching fallback)
+            return expr;
+        });
+        
+        if (hasUnmigratedExpressions) {
+            needsExpressionMigration = true;
+            return {
+                ...item,
+                analysis: {
+                    ...item.analysis,
+                    expressions: migratedExpressions
+                }
+            };
+        }
+        
+        return item;
+    });
+    
+    if (needsExpressionMigration) {
+        debugLog('🔄 EXPRESSION MIGRATION COMPLETED', {
+            migratedExpressions: expressionMigratedCount,
+            totalItems: saved.length
+        });
+    }
 
     if (needsCleanup) {
         debugLog('🧹 SAVED ANALYSES CLEANUP COMPLETED', {
@@ -4562,12 +4719,13 @@ loadSavedAnalyses = async function() {
     }
 
     // Save migrated/cleaned data back to storage if needed
-    if (needsDateMigration || needsFolderMigration || needsCleanup) {
+    if (needsDateMigration || needsFolderMigration || needsExpressionMigration || needsCleanup) {
         try {
             await saveAnalysesSafe(saved);
             debugLog('💾 MIGRATED/CLEANED DATA SAVED', { 
                 migratedItems: migratedCount,
                 folderMigratedItems: folderMigratedCount,
+                expressionMigratedItems: expressionMigratedCount,
                 cleanedItems: cleanedCount 
             }, 'success');
         } catch (error) {
@@ -4785,13 +4943,23 @@ loadSavedAnalyses = async function() {
     let filteredActive = deduplicatedItems;
     if (currentFolderFilter !== null) {
         // When viewing a specific folder, only show files in that folder
-        filteredActive = deduplicatedItems.filter(item => 
-            (item.folderId ?? null) === currentFolderFilter
-        );
+        // Normalize currentFolderFilter to string for consistent comparison
+        const normalizedFilterId = String(currentFolderFilter);
+        filteredActive = deduplicatedItems.filter(item => {
+            const itemFolderId = item.folderId ?? null;
+            const normalizedItemFolderId = itemFolderId === null ? null : String(itemFolderId);
+            return normalizedItemFolderId === normalizedFilterId;
+        });
         debugLog('📁 FOLDER FILTER APPLIED', {
             folderId: currentFolderFilter,
+            normalizedFilterId: normalizedFilterId,
             totalItems: deduplicatedItems.length,
-            filteredItems: filteredActive.length
+            filteredItems: filteredActive.length,
+            sampleItems: deduplicatedItems.slice(0, 3).map(item => ({
+                fileName: item.fileName,
+                folderId: item.folderId,
+                normalizedFolderId: (item.folderId ?? null) === null ? null : String(item.folderId)
+            }))
         });
     } else {
         // When showing all files (currentFolderFilter === null), show only files NOT in any folder
@@ -4993,7 +5161,12 @@ function renderActiveSaves(activeItems, folders = []) {
             folderItem.setAttribute('data-folder-id', String(folder.id));
             folderItem.setAttribute('draggable', 'false');
             
+            // Add checkbox if in edit mode
+            const checkboxHtml = isEditMode ? 
+                `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(folder.id)}">` : '';
+            
             folderItem.innerHTML = `
+                ${checkboxHtml}
                 <div class="saved-item-content-wrapper">
                     <div class="saved-item-content">
                         <div class="saved-item-top-row">
@@ -5008,14 +5181,14 @@ function renderActiveSaves(activeItems, folders = []) {
                 </div>
             `;
             
-            // Add click handler to filter by folder
-            folderItem.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                if (!isEditMode) {
+            // Add click handler to filter by folder (only if not in edit mode)
+            if (!isEditMode) {
+                folderItem.addEventListener('click', async (e) => {
+                    e.stopPropagation();
                     currentFolderFilter = folder.id;
                     await loadSavedAnalyses();
-                }
-            });
+                });
+            }
             
             // Add right-click handler for context menu
             folderItem.addEventListener('contextmenu', (e) => {
@@ -5068,6 +5241,24 @@ function renderActiveSaves(activeItems, folders = []) {
                 }
             });
             
+            // Add checkbox event handler for folders (same as files)
+            if (isEditMode) {
+                const checkbox = folderItem.querySelector('.saved-item-checkbox');
+                if (checkbox) {
+                    checkbox.addEventListener('click', (e) => e.stopPropagation());
+                }
+                folderItem.addEventListener('click', (e) => {
+                    if (e.target.type !== 'checkbox' && 
+                        !e.target.closest('.saved-item-checkbox')) {
+                        // Toggle checkbox when clicking the row
+                        const checkbox = folderItem.querySelector('.saved-item-checkbox');
+                        if (checkbox) {
+                            checkbox.checked = !checkbox.checked;
+                        }
+                    }
+                });
+            }
+            
             activeSavesList.appendChild(folderItem);
         });
     }
@@ -5109,8 +5300,8 @@ function renderActiveSaves(activeItems, folders = []) {
         
         // Format: File Name / Last Studied / Created
             savedItem.innerHTML = `
-                <div class="saved-item-content-wrapper">
                     ${checkboxHtml}
+                <div class="saved-item-content-wrapper">
                     <div class="saved-item-content">
                         <div class="saved-item-top-row">
                             <button class="favorite-star-btn ${item.isFavorite ? 'favorite-active' : ''}" data-item-id="${escapeHtml(item.id)}" title="${item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}" type="button">
@@ -7619,18 +7810,33 @@ function displayStudyExpressions() {
         const currentSwedishText = currentStudyItem.item.swedish.toLowerCase();
         
         expressionsToShow = state.currentAnalysis.expressions.filter(expr => {
-            // Check if expression is associated with this translation by index
-            if (expr.translationIndex !== undefined && expr.translationIndex === currentTranslationIndex) {
-                return true;
+            // First check: if expression has translationIndex, it must match exactly
+            if (expr.translationIndex !== undefined) {
+                return expr.translationIndex === currentTranslationIndex;
             }
             
-            // Backward compatibility: include expressions where the word appears in the Swedish text
-            if (expr.translationIndex === undefined) {
-                const exprWord = expr.word.toLowerCase();
-                return currentSwedishText.includes(exprWord) || exprWord.split(' ').some(w => currentSwedishText.includes(w));
-            }
+            // Fallback for expressions without translationIndex (backward compatibility):
+            // Only show if the word actually appears as a complete word in the current Swedish text
+            // This handles old expressions that were added before translationIndex was implemented
+            const exprWord = expr.word.toLowerCase().trim();
+            // Remove "att " prefix for verbs when checking
+            const wordToCheck = exprWord.startsWith('att ') ? exprWord.substring(4).trim() : exprWord;
             
-            return false;
+            // For multi-word phrases, check if all words appear
+            const words = wordToCheck.split(/\s+/).filter(w => w.length > 0);
+            if (words.length > 1) {
+                // For phrases, all words must appear in order (allowing for punctuation/other words between)
+                const phrasePattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*?');
+                const regex = new RegExp(phrasePattern, 'i');
+                return regex.test(currentSwedishText);
+            } else {
+                // For single words, use word boundary matching to ensure it's a complete word
+                // Match word boundaries or punctuation before/after the word
+                const escapedWord = wordToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Match word at start/end of string, or with word boundaries (non-word chars before/after)
+                const wordBoundaryRegex = new RegExp(`(^|[^\\wåäöÅÄÖ])${escapedWord}([^\\wåäöÅÄÖ]|$)`, 'i');
+                return wordBoundaryRegex.test(currentSwedishText);
+            }
         });
     }
     

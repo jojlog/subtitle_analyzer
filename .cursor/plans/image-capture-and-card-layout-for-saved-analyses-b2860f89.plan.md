@@ -1,71 +1,70 @@
-<!-- b2860f89-4d27-450e-85fc-5f8b1c4c8725 35a13eee-bca7-495c-869a-3f9337f62bc6 -->
-# Fix Duplicates on Restart and Drag-and-Drop Issues
+<!-- b2860f89-4d27-450e-85fc-5f8b1c4c8725 cee1a114-7e2b-47cb-a7db-ef63263bbbf9 -->
+# Associate Expressions with Line Indices
 
-## Issue 1: Duplicates Temporarily Show on Restart
+## Problem
 
-**Root Cause**: `cleanupInactiveSavesOnStartup()` runs asynchronously without awaiting. When user clicks "Saved Analyses" button immediately after startup, `loadSavedAnalyses()` loads data before deduplication completes, causing duplicates to appear temporarily.
+Currently, expressions are extracted per batch (multiple lines together) and stored globally without line associations. The study modal filters by word matching, which is inaccurate and shows expressions from other lines.
 
-**Solution**:
+## Solution
 
-- Ensure `cleanupInactiveSavesOnStartup()` completes before allowing `loadSavedAnalyses()` to proceed on first load
-- Add a flag to track if startup cleanup has completed
-- Make `loadSavedAnalyses()` wait for startup cleanup if it hasn't completed yet
-- Alternatively, ensure startup cleanup runs synchronously before any UI interactions
+Associate expressions with specific translation line indices during batch processing, and update filtering to show only expressions from the current line. Migrate existing analyses to associate expressions with their source lines.
 
-**Files to modify**:
+## Implementation
 
-- `renderer.js`: 
-- Add startup cleanup completion tracking
-- Modify `loadSavedAnalyses()` to await startup cleanup on first load
-- Or modify startup sequence to await cleanup before allowing UI interactions
+### 1. Associate expressions with line indices during batch processing
 
-## Issue 2: Drag-and-Drop Not Working
+**File:** `renderer.js` (around line 1742-2765)
 
-**Root Cause**: In Electron, `e.dataTransfer.getData()` in the `drop` event may return empty string if data wasn't set during `dragover`. The code currently only sets data in `dragstart`, which works in browsers but not reliably in Electron.
+- In `processSingleBatch()`, after parsing `batchData.expressions`:
+- For each expression, determine which translation line(s) it came from by matching the expression word against the Swedish text of each translation in the batch
+- Set `translationIndex` on each expression to the index of the matching translation (use global index: `globalEntryIndexStart + translationIndex`)
+- If an expression matches multiple lines in the batch, create separate expression entries for each line (or associate with the first match)
+- Store `translationText` (the Swedish text) for fallback matching
 
-**Solution**:
+- In the batch merging logic (around line 2763-2765):
+- Preserve `translationIndex` when merging expressions from batches
+- Update deduplication logic to consider `translationIndex` (same word can appear in different lines)
 
-- Add `e.dataTransfer.setData()` call in `dragover` event handlers for folder drop targets
-- Store the dragged item ID in a variable accessible to both dragstart and dragover
-- Ensure data is set in both `dragstart` and `dragover` events
+### 2. Update expression filtering in study modal
 
-**Files to modify**:
+**File:** `renderer.js` (around line 7654-7682)
 
-- `renderer.js`:
-- In `renderActiveSaves()`: Add `setData` in folder `dragover` handler (around line 4862)
-- In `renderActiveSavesAsCards()`: Add `setData` in folder `dragover` handler (around line 5820)
-- In `addFolderToUI()`: Add `setData` in folder `dragover` handler for list view (around line 240) and card view (around line 324)
-- Store dragged item ID in a way that's accessible to dragover handlers
+- In `displayStudyExpressions()`:
+- Filter expressions where `expr.translationIndex === currentTranslationIndex`
+- Remove the word-matching fallback for expressions with `translationIndex` (they must match exactly)
+- Keep word-matching fallback only for expressions without `translationIndex` (backward compatibility for old data)
 
-**Implementation details**:
+### 3. Migrate existing analyses
 
-- Use a module-level variable or closure to store the dragged item ID
-- Set data in both `dragstart` (on file items) and `dragover` (on folder drop targets)
-- Ensure `getData` in `drop` handler can retrieve the value
+**File:** `renderer.js` (in `loadSavedAnalyses()` or a separate migration function)
 
-## Implementation Steps
+- When loading saved analyses:
+- Check if expressions have `translationIndex` set
+- For expressions without `translationIndex`:
+  - Match each expression word against all translations in the analysis
+  - Set `translationIndex` to the first matching translation index
+  - If no match found, leave `translationIndex` undefined (will use word-matching fallback)
+- Save migrated data back to storage
 
-1. **Fix startup deduplication timing**:
+### 4. Update expression deduplication
 
-- Add `let startupCleanupComplete = false;` at module level
-- Modify `cleanupInactiveSavesOnStartup()` to set flag when complete
-- Modify `loadSavedAnalyses()` to check flag and await cleanup if needed
-- Or: Make startup cleanup await before continuing in DOMContentLoaded
+**File:** `renderer.js` (around line 2789-2797)
 
-2. **Fix drag-and-drop**:
+- Modify expression deduplication to use `word + translationIndex` as the key instead of just `word`
+- This allows the same word to appear in multiple lines as separate expressions
 
-- Add module-level variable: `let draggedItemId = null;`
-- In file item `dragstart` handlers: Set `draggedItemId = item.id` and `e.dataTransfer.setData('text/plain', item.id)`
-- In folder `dragover` handlers: Add `e.dataTransfer.setData('text/plain', draggedItemId || '')`
-- In folder `drop` handlers: Use `e.dataTransfer.getData('text/plain')` or fallback to `draggedItemId`
-- Reset `draggedItemId = null` in `dragend` handlers
+## Key Changes Summary
 
-## Testing
+1. **Expression association**: Set `translationIndex` on expressions during batch processing by matching words against translation Swedish text
+2. **Filtering**: Only show expressions where `translationIndex` matches the current line
+3. **Migration**: Automatically associate existing expressions with their source lines when loading analyses
+4. **Deduplication**: Update to allow same word in different lines
 
-- Restart app and immediately click "Saved Analyses" - should not show duplicates
-- Drag file card/item onto folder - should move file into folder
-- Drag file from list view onto folder - should work
-- Drag file from card view onto folder - should work
+## Notes
+
+- Matching logic should handle verb forms (e.g., "att flytta" should match "flytta" in text)
+- For phrases, check if all words appear in the translation text
+- Migration runs automatically on load, so existing analyses will be updated gradually
 
 ### To-dos
 
@@ -78,7 +77,7 @@
 - [ ] Add CSS styles for card grid layout, card items, and thumbnails
 - [ ] Add renderActiveSavesAsCards() function and view toggle functionality
 - [ ] Add localStorage persistence for view mode preference
-- [ ] Add startup cleanup completion tracking and ensure loadSavedAnalyses waits for cleanup on first load
-- [ ] Add dataTransfer.setData in dragover handlers and store draggedItemId for Electron compatibility
-- [ ] Test that duplicates do not appear on restart even when clicking Saved Analyses immediately
-- [ ] Test drag-and-drop works in both list and card views for moving files into folders
+- [ ] Modify processSingleBatch() to associate expressions with translation line indices by matching words against Swedish text
+- [ ] Update expression deduplication to use word + translationIndex as key, allowing same word in different lines
+- [ ] Update displayStudyExpressions() to only show expressions where translationIndex matches current line
+- [ ] Add migration logic to associate existing expressions with their source lines when loading analyses

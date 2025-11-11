@@ -18,7 +18,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "html2canvas": "^1.4.1"
   },
   "devDependencies": {
     "electron": "^28.0.0",

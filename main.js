@@ -222,10 +222,8 @@ function createWindow() {
     }
   });
 
-  // Open DevTools only in development mode
-  if (DEBUG_ENABLED || process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools();
-  }
+  // Always open DevTools for debugging
+  mainWindow.webContents.openDevTools();
 }
 
 app.whenReady().then(() => {
@@ -265,6 +263,29 @@ function getDataFilePath(filename) {
   const filePath = path.join(app.getPath('userData'), filename);
   debugLog('debug', `Resolved data file path: ${filename} -> ${filePath}`);
   return filePath;
+}
+
+// Get thumbnail directory path
+function getThumbnailDir() {
+  return path.join(app.getPath('userData'), 'thumbnails');
+}
+
+// Get thumbnail file path for a given analysis ID
+function getThumbnailPath(analysisId) {
+  const thumbnailDir = getThumbnailDir();
+  return path.join(thumbnailDir, `${analysisId}.png`);
+}
+
+// Ensure thumbnails directory exists
+async function ensureThumbnailDir() {
+  const thumbnailDir = getThumbnailDir();
+  try {
+    await fs.mkdir(thumbnailDir, { recursive: true });
+    debugLog('debug', 'Thumbnail directory ensured', { path: thumbnailDir });
+  } catch (error) {
+    debugLog('error', 'Failed to create thumbnail directory', { error: error.message, path: thumbnailDir });
+    throw error;
+  }
 }
 
 // Encryption helpers for API key
@@ -692,6 +713,51 @@ ipcMain.handle('load-study-sessions', async () => {
 ipcMain.handle('renderer-debug-log', async (event, level, message, ...args) => {
   debugLog(level, `[Renderer] ${message}`, ...args);
   return { success: true };
+});
+
+// IPC Handler to save preview image from base64 data
+ipcMain.handle('save-preview-image', async (event, analysisId, imageData) => {
+  try {
+    await ensureThumbnailDir();
+    const thumbnailPath = getThumbnailPath(analysisId);
+    
+    // Convert base64 to buffer
+    const base64Data = imageData.replace(/^data:image\/png;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    
+    // Write image file
+    await fs.writeFile(thumbnailPath, buffer);
+    
+    // Set secure file permissions (Unix/Mac only)
+    await setSecureFilePermissions(thumbnailPath);
+    
+    const relativePath = `thumbnails/${analysisId}.png`;
+    debugLog('info', 'Preview image saved', { analysisId, path: relativePath });
+    return { success: true, path: relativePath };
+  } catch (error) {
+    debugLog('error', 'Error saving preview image', { error: error.message, analysisId });
+    return { success: false, error: error.message };
+  }
+});
+
+// IPC Handler to get thumbnail path
+ipcMain.handle('get-thumbnail-path', async (event, analysisId) => {
+  try {
+    const thumbnailPath = getThumbnailPath(analysisId);
+    const relativePath = `thumbnails/${analysisId}.png`;
+    
+    // Check if file exists
+    try {
+      await fs.access(thumbnailPath);
+      // Return full path for file:// URL construction
+      return { success: true, path: thumbnailPath, relativePath: relativePath, exists: true };
+    } catch {
+      return { success: true, path: thumbnailPath, relativePath: relativePath, exists: false };
+    }
+  } catch (error) {
+    debugLog('error', 'Error getting thumbnail path', { error: error.message, analysisId });
+    return { success: false, error: error.message };
+  }
 });
 
 // IPC Handlers for exit check and cleanup

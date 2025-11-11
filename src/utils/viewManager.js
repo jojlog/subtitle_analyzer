@@ -47,7 +47,14 @@ class ViewManager {
         // Hide all views except exceptions
         this.views.forEach((el, id) => {
             if (id === viewId || exceptions.includes(id)) {
-                el.style.display = 'flex';
+                // Use appropriate display value based on view type
+                if (id === VIEWS.SAVED_ANALYSES || id === VIEWS.UPLOAD || id === VIEWS.SETTINGS) {
+                    el.style.display = 'flex';
+                } else if (id === VIEWS.RESULTS) {
+                    el.style.display = 'block';
+                } else {
+                    el.style.display = 'flex';
+                }
             } else {
                 el.style.display = 'none';
             }
@@ -81,6 +88,14 @@ class ViewManager {
     }
 
     /**
+     * Get current view
+     * @returns {string|null}
+     */
+    getCurrentView() {
+        return this.currentView;
+    }
+
+    /**
      * Show home view (upload section)
      */
     showHome() {
@@ -111,7 +126,3 @@ class ViewManager {
 
 export const viewManager = new ViewManager();
 export { VIEWS };
-
-
-
-

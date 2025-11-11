@@ -38,7 +38,9 @@ let uploadArea, fileInput, fileInfo, fileName, scriptName, analyzeBtn, cancelBtn
 let fileProjectsList; // Container for multiple file projects list
 let translationsContent, expressionsContent, chatSection, chatMessages, chatInput, chatSendBtn;
 let saveAnalysisBtn, savedAnalysesBtn, savedAnalysesView, savedAnalysesList, editSavedBtn, goBackBtn, closeResultsBtn;
-let inactiveSavesSection, inactiveSavesList, activeSavesSection, activeSavesList, activeSavesHeader;
+let inactiveSavesSection, inactiveSavesList, activeSavesSection, activeSavesList, activeSavesHeader, activeSavesCards;
+let listViewBtn, cardViewBtn;
+let savedViewMode = 'list'; // 'list' or 'card'
 let currentSortColumn = 'dateEdited'; // Default sort by dateEdited
 let currentSortDirection = 'desc'; // Default descending (newest first)
 let settingsBtn, settingsView, closeSettingsBtn, apiKeyInput, saveApiKeyBtn, themeSelect;
@@ -654,6 +656,15 @@ document.addEventListener('DOMContentLoaded', () => {
     inactiveSavesList = document.getElementById('inactiveSavesList');
     activeSavesSection = document.getElementById('activeSavesSection');
     activeSavesList = document.getElementById('activeSavesList');
+    activeSavesCards = document.getElementById('activeSavesCards');
+    listViewBtn = document.getElementById('listViewBtn');
+    cardViewBtn = document.getElementById('cardViewBtn');
+    
+    // Load saved view mode preference
+    const savedViewModePref = localStorage.getItem('savedViewMode');
+    if (savedViewModePref === 'card' || savedViewModePref === 'list') {
+        savedViewMode = savedViewModePref;
+    }
     activeSavesHeader = document.getElementById('activeSavesHeader');
     editSavedBtn = document.getElementById('editSavedBtn');
     goBackBtn = document.getElementById('goBackBtn');
@@ -706,10 +717,24 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadArea: !!uploadArea,
         settingsBtn: !!settingsBtn,
         savedAnalysesBtn: !!savedAnalysesBtn,
+        savedAnalysesView: !!savedAnalysesView,
         homeBtn: !!homeBtn,
         studyModal: !!studyModal,
         themeSelect: !!themeSelect
     });
+    
+    // Debug: Check if savedAnalysesBtn exists
+    if (!savedAnalysesBtn) {
+        console.error('❌ savedAnalysesBtn NOT FOUND!');
+    } else {
+        console.log('✅ savedAnalysesBtn found:', savedAnalysesBtn);
+    }
+    
+    if (!savedAnalysesView) {
+        console.error('❌ savedAnalysesView NOT FOUND!');
+    } else {
+        console.log('✅ savedAnalysesView found:', savedAnalysesView);
+    }
     
     // Register views with ViewManager
     viewManager.register(VIEWS.UPLOAD, uploadSection);
@@ -3375,6 +3400,66 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
 // Utility functions are now imported from src/utils/helpers.js
 // Removed duplicate implementations: escapeHtml, validateAnalysisData, validateFileName
 
+// Capture analysis preview image
+async function captureAnalysisPreview(analysisId) {
+    try {
+        // Check if html2canvas is available
+        if (typeof window.html2canvas === 'undefined') {
+            debugLog('⚠️ CAPTURE FAILED', { reason: 'html2canvas not loaded' }, 'warn');
+            return null;
+        }
+
+        // Get the results content section (translations + expressions)
+        const resultsContent = document.querySelector('.results-content');
+        if (!resultsContent) {
+            debugLog('⚠️ CAPTURE FAILED', { reason: 'Results content not found' }, 'warn');
+            return null;
+        }
+
+        // Check if results section is visible
+        if (resultsSection && resultsSection.style.display === 'none') {
+            debugLog('⚠️ CAPTURE SKIPPED', { reason: 'Results section not visible' }, 'warn');
+            return null;
+        }
+
+        // Use html2canvas to capture the results content
+        const canvas = await window.html2canvas(resultsContent, {
+            backgroundColor: '#000000',
+            scale: 1,
+            logging: false,
+            useCORS: true,
+            allowTaint: false
+        });
+
+        // Convert canvas to base64 image data
+        const imageData = canvas.toDataURL('image/png');
+        
+        // Save image via Electron bridge
+        const result = await electronBridge.savePreviewImage(analysisId, imageData);
+        
+        if (result.success) {
+            debugLog('✅ PREVIEW CAPTURED', { 
+                analysisId, 
+                path: result.path 
+            }, 'success');
+            return result.path;
+        } else {
+            debugLog('❌ CAPTURE SAVE FAILED', { 
+                analysisId, 
+                error: result.error 
+            }, 'error');
+            return null;
+        }
+    } catch (error) {
+        debugLog('❌ CAPTURE ERROR', { 
+            analysisId, 
+            error: error.message 
+        }, 'error');
+        console.error('Error capturing preview:', error);
+        return null;
+    }
+}
+
     // Save analysis
     saveAnalysisBtn.addEventListener('click', async () => {
         debugLog('💾 MANUAL SAVE INITIATED', {
@@ -3439,6 +3524,20 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
                         savedAnalysisId: savedAnalysis.id,
                         fileName: savedAnalysis.fileName
                     }, 'success');
+                    
+                    // Auto-capture preview image
+                    const thumbnailPath = await captureAnalysisPreview(savedAnalysis.id);
+                    if (thumbnailPath) {
+                        // Update saved analysis with thumbnail path
+                        savedAnalysis.thumbnailPath = thumbnailPath;
+                        // Update in the saved array
+                        const index = saved.findIndex(a => a.id === savedAnalysis.id);
+                        if (index !== -1) {
+                            saved[index].thumbnailPath = thumbnailPath;
+                            await saveAnalysesSafe(saved);
+                        }
+                    }
+                    
                 await showWarningModal('Analysis saved successfully!');
                 } else {
                     debugLog('❌ MANUAL SAVE FAILED', {
@@ -3473,36 +3572,78 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
     }
 
     // Saved analyses view
-    savedAnalysesBtn.addEventListener('click', async () => {
-        debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
-            isAnalyzing: state.isAnalyzing,
-            hasCurrentAnalysis: !!state.currentAnalysis,
-            projectCount: state.fileProjects.length
-        });
-
-        // Show warning if analysis is in progress
-        if (state.isAnalyzing) {
-            debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
-                showingConfirmDialog: true,
-                currentProjectId: state.currentProjectId
+    if (!savedAnalysesBtn) {
+        console.error('❌ savedAnalysesBtn element not found! Cannot attach click handler.');
+    } else {
+        console.log('✅ Saved Analyses button found, attaching click handler');
+        
+        // Try both addEventListener and onclick as fallback
+        const handleSavedAnalysesClick = async (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            console.log('🔥 Saved Analyses button clicked - handler fired!');
+            debugLog('📂 NAVIGATING TO SAVED ANALYSES', {
+                isAnalyzing: state.isAnalyzing,
+                hasCurrentAnalysis: !!state.currentAnalysis,
+                projectCount: state.fileProjects.length
             });
-            const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
-            if (!confirmLeave) {
-                debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
+
+            // Show warning if analysis is in progress
+            if (state.isAnalyzing) {
+                debugLog('⚠️ ANALYSIS IN PROGRESS WARNING', {
+                    showingConfirmDialog: true,
+                    currentProjectId: state.currentProjectId
+                });
+                const confirmLeave = confirm('Analysis is in progress. Are you sure you want to leave? The analysis will continue in the background.');
+                if (!confirmLeave) {
+                    debugLog('❌ NAVIGATION CANCELLED', { reason: 'User declined to leave analysis' });
+                    return;
+                }
+                debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
+            }
+            
+            isEditMode = false; // Reset edit mode when opening
+            
+            // Show the view first
+            if (!savedAnalysesView) {
+                console.error('savedAnalysesView element not found!');
                 return;
             }
-            debugLog('✅ NAVIGATION CONFIRMED', { reason: 'User confirmed leaving analysis' });
-        }
+            
+            console.log('Showing saved analyses view');
+            console.log('savedAnalysesView before show:', savedAnalysesView.style.display);
+            
+            // Hide other views manually first
+            if (uploadSection) uploadSection.style.display = 'none';
+            if (resultsSection) resultsSection.style.display = 'none';
+            if (settingsView) settingsView.style.display = 'none';
+            
+            // Show saved analyses view
+            savedAnalysesView.style.display = 'flex';
+            console.log('savedAnalysesView after show:', savedAnalysesView.style.display);
+            
+            // Also use viewManager
+            viewManager.showSavedAnalyses();
+            
+            await loadSavedAnalyses();
+            if (editSavedBtn) {
+                updateEditButton();
+            }
+            console.log('Saved analyses view should now be visible');
+            // Note: Analysis continues in background if in progress
+            // Progress will be visible when returning to home window
+        };
         
-        isEditMode = false; // Reset edit mode when opening
-        await loadSavedAnalyses();
-        if (editSavedBtn) {
-            updateEditButton();
-        }
-        viewManager.showSavedAnalyses();
-        // Note: Analysis continues in background if in progress
-        // Progress will be visible when returning to home window
-    });
+        // Attach event listener
+        savedAnalysesBtn.addEventListener('click', handleSavedAnalysesClick);
+        
+        // Also set onclick as backup
+        savedAnalysesBtn.onclick = handleSavedAnalysesClick;
+        
+        console.log('✅ Click handler attached to savedAnalysesBtn');
+    }
 
     // Edit/Delete button for saved analyses
     if (editSavedBtn) {
@@ -3574,6 +3715,19 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
             isEditMode = false;
             await loadSavedAnalyses();
             updateEditButton();
+        });
+    }
+    
+    // View toggle buttons
+    if (listViewBtn) {
+        listViewBtn.addEventListener('click', () => {
+            toggleSavedView('list');
+        });
+    }
+    
+    if (cardViewBtn) {
+        cardViewBtn.addEventListener('click', () => {
+            toggleSavedView('card');
         });
     }
 
@@ -3878,12 +4032,21 @@ async function loadSavedAnalyses() {
     });
     
     if (filteredActive.length > 0) {
-        if (activeSavesHeader) activeSavesHeader.style.display = 'block';
-        renderActiveSaves(filteredActive);
+        if (activeSavesHeader) activeSavesHeader.style.display = savedViewMode === 'list' ? 'block' : 'none';
+        // Update view display before rendering
+        updateViewToggleButtons();
+        if (savedViewMode === 'card') {
+            await renderActiveSavesAsCards(filteredActive);
+        } else {
+            renderActiveSaves(filteredActive);
+        }
     } else {
         if (activeSavesHeader) activeSavesHeader.style.display = 'none';
         if (activeSavesList) {
             activeSavesList.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No completed analyses yet.</p>';
+        }
+        if (activeSavesCards) {
+            activeSavesCards.innerHTML = '<p style="color: #666; text-align: center; padding: 24px;">No completed analyses yet.</p>';
         }
         
         // Log why no items are showing
@@ -3895,8 +4058,13 @@ async function loadSavedAnalyses() {
         }, 'warn');
     }
     
-    // Setup sorting handlers
-    setupSorting();
+    // Setup sorting handlers (only for list view)
+    if (savedViewMode === 'list') {
+        setupSorting();
+    }
+    
+    // Update view toggle buttons
+    updateViewToggleButtons();
     
     return; // Exit early - rendering is done in separate functions
 }
@@ -4001,6 +4169,17 @@ function renderActiveSaves(activeItems) {
         const checkboxHtml = isEditMode ? 
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
+        // Add capture button HTML if in edit mode
+        const captureButtonHtml = isEditMode ? 
+            `<button class="saved-item-capture-btn" data-item-id="${escapeHtml(item.id)}" title="Capture Preview Image" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+                Capture Preview
+            </button>` : '';
+        
         // Format: File Name / Last Studied / Created
             savedItem.innerHTML = `
                 <div class="saved-item-content-wrapper">
@@ -4017,6 +4196,7 @@ function renderActiveSaves(activeItems) {
                         <span class="saved-item-date-created">${dateCreatedStr}</span>
                             <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
                         </div>
+                        ${captureButtonHtml ? `<div class="saved-item-bottom-row">${captureButtonHtml}</div>` : ''}
                     </div>
                 </div>
             `;
@@ -4237,8 +4417,211 @@ function renderActiveSaves(activeItems) {
             });
         }
         
+        // Add capture preview button click handler (only in edit mode)
+        if (isEditMode) {
+            const captureBtn = savedItem.querySelector('.saved-item-capture-btn');
+            if (captureBtn) {
+                captureBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation(); // Prevent triggering the item click
+                    const itemId = captureBtn.dataset.itemId;
+                    
+                    // First, open the analysis to make results visible
+                    const saved = await fetchSavedAnalyses('capture-preview');
+                    const targetItem = saved.find(s => String(s.id) === String(itemId));
+                    
+                    if (!targetItem) {
+                        await showWarningModal('Analysis not found.');
+                        return;
+                    }
+                    
+                    // Temporarily show results section and load analysis
+                    const originalView = viewManager.getCurrentView();
+                    await reopenAnalysis(targetItem);
+                    
+                    // Wait for results to render
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Capture the preview
+                    const thumbnailPath = await captureAnalysisPreview(itemId);
+                    
+                    if (thumbnailPath) {
+                        // Update saved analysis with thumbnail path
+                        const index = saved.findIndex(s => String(s.id) === String(itemId));
+                        if (index !== -1) {
+                            saved[index].thumbnailPath = thumbnailPath;
+                            await saveAnalysesSafe(saved);
+                            await showWarningModal('Preview image captured successfully!');
+                        }
+                    } else {
+                        await showWarningModal('Failed to capture preview image. Please try again.');
+                    }
+                    
+                    // Return to saved analyses view
+                    viewManager.showSavedAnalyses();
+                    await loadSavedAnalyses();
+                });
+            }
+        }
+        
         activeSavesList.appendChild(savedItem);
     });
+}
+
+// Render active saves as cards
+async function renderActiveSavesAsCards(activeItems) {
+    if (!activeSavesCards) return;
+    
+    activeSavesCards.innerHTML = '';
+    
+    // Sort active items based on current sort settings
+    const sorted = sortActiveSaves(activeItems);
+    
+    for (const item of sorted) {
+        // Validate analysis data before rendering
+        if (item.analysis) {
+            const validation = validateAnalysisData(item.analysis);
+            if (!validation.valid) {
+                debugLog('⚠️ SKIPPING INVALID ANALYSIS IN CARD RENDER', {
+                    itemId: item.id,
+                    fileName: item.fileName,
+                    error: validation.error
+                }, 'warn');
+                return;
+            }
+        }
+        
+        const card = document.createElement('div');
+        card.className = 'saved-card';
+        card.setAttribute('data-item-id', String(item.id));
+        
+        // Format dates
+        const dateEdited = item.dateEdited || item.dateCreated || item.date || new Date().toISOString();
+        const dateCreated = item.dateCreated || item.dateEdited || item.date || new Date().toISOString();
+        const dateEditedObj = new Date(dateEdited);
+        const dateCreatedObj = new Date(dateCreated);
+        const dateEditedStr = dateEditedObj.toLocaleDateString() + ' ' + dateEditedObj.toLocaleTimeString();
+        const dateCreatedStr = dateCreatedObj.toLocaleDateString() + ' ' + dateCreatedObj.toLocaleTimeString();
+        
+        // Get thumbnail path - construct file:// URL for local file
+        const thumbnailPath = item.thumbnailPath;
+        let thumbnailHtml = '';
+        let placeholderHtml = '';
+        if (thumbnailPath) {
+            // Use Electron's path resolution - construct file:// URL
+            // The thumbnailPath is stored as relative path like "thumbnails/{id}.png"
+            // We need to resolve it to full path using Electron API
+            const result = await electronBridge.getThumbnailPath(item.id);
+            if (result.success && result.exists) {
+                // Construct file:// URL - on Windows it needs 3 slashes, on Unix 2
+                const isWindows = navigator.platform.toLowerCase().includes('win');
+                const fileUrl = isWindows 
+                    ? `file:///${result.path.replace(/\\/g, '/')}`
+                    : `file://${result.path}`;
+                thumbnailHtml = `<img src="${fileUrl}" class="saved-card-thumbnail" alt="Preview" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`;
+                placeholderHtml = `<div class="saved-card-thumbnail-placeholder" style="display: none;">No Preview</div>`;
+            } else {
+                placeholderHtml = `<div class="saved-card-thumbnail-placeholder">No Preview</div>`;
+            }
+        } else {
+            placeholderHtml = `<div class="saved-card-thumbnail-placeholder">No Preview</div>`;
+        }
+        
+        card.innerHTML = `
+            ${thumbnailHtml}
+            ${placeholderHtml}
+            <div class="saved-card-content">
+                <div class="saved-card-header">
+                    <div class="saved-card-name">${escapeHtml(item.fileName)}</div>
+                    <button class="saved-card-favorite ${item.isFavorite ? 'favorite-active' : ''}" data-item-id="${escapeHtml(item.id)}" title="${item.isFavorite ? 'Remove from favorites' : 'Add to favorites'}" type="button">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="${item.isFavorite ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="saved-card-dates">
+                    <div class="saved-card-date">
+                        <span class="saved-card-date-label">Last Studied:</span>
+                        <span class="saved-card-date-value">${dateEditedStr}</span>
+                    </div>
+                    <div class="saved-card-date">
+                        <span class="saved-card-date-label">Created:</span>
+                        <span class="saved-card-date-value">${dateCreatedStr}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add click handler to open analysis
+        card.addEventListener('click', async (e) => {
+            // Exclude clicks on favorite button
+            if (e.target.closest('.saved-card-favorite')) {
+                return;
+            }
+            await reopenAnalysis(item);
+        });
+        
+        // Add favorite button click handler
+        const favoriteBtn = card.querySelector('.saved-card-favorite');
+        if (favoriteBtn) {
+            favoriteBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const itemId = favoriteBtn.dataset.itemId;
+                
+                try {
+                    let saved = await fetchSavedAnalyses('toggle-favorite-card');
+                    const savedItem = saved.find(s => String(s.id) === String(itemId));
+                    if (savedItem) {
+                        savedItem.isFavorite = !savedItem.isFavorite;
+                        await saveAnalysesSafe(saved);
+                        await loadSavedAnalyses();
+                    }
+                } catch (error) {
+                    console.error('Error toggling favorite:', error);
+                }
+            });
+        }
+        
+        activeSavesCards.appendChild(card);
+    }
+}
+
+// Toggle between list and card view
+function toggleSavedView(mode) {
+    if (mode !== 'list' && mode !== 'card') return;
+    
+    savedViewMode = mode;
+    localStorage.setItem('savedViewMode', mode);
+    
+    // Update UI
+    updateViewToggleButtons();
+    
+    // Reload to re-render in the new view
+    loadSavedAnalyses();
+}
+
+// Update view toggle button states
+function updateViewToggleButtons() {
+    if (listViewBtn && cardViewBtn) {
+        if (savedViewMode === 'list') {
+            listViewBtn.classList.add('active');
+            cardViewBtn.classList.remove('active');
+            if (activeSavesList) {
+                activeSavesList.style.display = 'flex';
+            }
+            if (activeSavesCards) {
+                activeSavesCards.style.display = 'none';
+            }
+        } else {
+            listViewBtn.classList.remove('active');
+            cardViewBtn.classList.add('active');
+            if (activeSavesList) {
+                activeSavesList.style.display = 'none';
+            }
+            if (activeSavesCards) {
+                activeSavesCards.style.display = 'grid';
+            }
+        }
+    }
 }
 
 // Helper function to sort active saves

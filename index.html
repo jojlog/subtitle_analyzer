@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
     <title>Swedish Subtitle Analyzer</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -139,6 +140,26 @@
                         <p class="saved-header-hint">double-click to rename files</p>
                     </div>
                     <div class="saved-header-buttons">
+                        <div class="saved-view-toggle">
+                            <button id="listViewBtn" class="view-toggle-btn active" title="List View">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="8" y1="6" x2="21" y2="6"></line>
+                                    <line x1="8" y1="12" x2="21" y2="12"></line>
+                                    <line x1="8" y1="18" x2="21" y2="18"></line>
+                                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                                </svg>
+                            </button>
+                            <button id="cardViewBtn" class="view-toggle-btn" title="Card View">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="14" width="7" height="7"></rect>
+                                    <rect x="3" y="14" width="7" height="7"></rect>
+                                </svg>
+                            </button>
+                        </div>
                         <button id="editSavedBtn" class="edit-btn">Edit</button>
                         <button id="goBackBtn" class="go-back-btn" style="display: none;">Go Back</button>
                     </div>
@@ -173,6 +194,7 @@
                 <!-- Active Saves Section (Completed) -->
                 <div id="activeSavesSection" class="active-saves-section">
                     <div id="activeSavesList" class="active-saves-list"></div>
+                    <div id="activeSavesCards" class="active-saves-cards" style="display: none;"></div>
                 </div>
             </div>
 

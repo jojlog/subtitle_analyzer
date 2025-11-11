@@ -16,7 +16,9 @@ const ALLOWED_CHANNELS = new Set([
   'load-study-sessions',
   'check-unfinished-files',
   'cleanup-unfinished-files',
-  'renderer-debug-log'
+  'renderer-debug-log',
+  'save-preview-image',
+  'get-thumbnail-path'
 ]);
 
 // Helper function to safely wrap IPC calls with error handling and channel validation
@@ -85,6 +87,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // Silently fail for debug logging to avoid recursion
       return Promise.resolve({ success: false });
     }
-  }
+  },
+  
+  // Image capture
+  savePreviewImage: (analysisId, imageData) => safeInvoke('save-preview-image', analysisId, imageData),
+  getThumbnailPath: (analysisId) => safeInvoke('get-thumbnail-path', analysisId)
 });
 

@@ -61,6 +61,12 @@ export const electronBridge = {
     async cleanupUnfinishedFiles() {
         return callBridge('cleanupUnfinishedFiles');
     },
+    async savePreviewImage(analysisId, imageData) {
+        return callBridge('savePreviewImage', analysisId, imageData);
+    },
+    async getThumbnailPath(analysisId) {
+        return callBridge('getThumbnailPath', analysisId);
+    },
 };
 
 export async function invokeRendererDebug(level, message, details) {

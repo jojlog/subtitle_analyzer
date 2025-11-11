@@ -701,6 +701,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const warningModal = document.getElementById('warningModal');
     const warningModalMessage = document.getElementById('warningModalMessage');
     const warningModalOK = document.getElementById('warningModalOK');
+    
+    // Rename/Upload Modal elements
+    const renameUploadModal = document.getElementById('renameUploadModal');
+    const renameUploadInput = document.getElementById('renameUploadInput');
+    const imageUploadInput = document.getElementById('imageUploadInput');
+    const imageUploadBtn = document.getElementById('imageUploadBtn');
+    const imageRemoveBtn = document.getElementById('imageRemoveBtn');
+    const imagePreview = document.getElementById('imagePreview');
+    const imagePreviewPlaceholder = document.getElementById('imagePreviewPlaceholder');
+    const renameUploadCancel = document.getElementById('renameUploadCancel');
+    const renameUploadSave = document.getElementById('renameUploadSave');
 
     // Debug console elements
     const debugBtn = document.getElementById('debugBtn');
@@ -3400,66 +3411,6 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
 // Utility functions are now imported from src/utils/helpers.js
 // Removed duplicate implementations: escapeHtml, validateAnalysisData, validateFileName
 
-// Capture analysis preview image
-async function captureAnalysisPreview(analysisId) {
-    try {
-        // Check if html2canvas is available
-        if (typeof window.html2canvas === 'undefined') {
-            debugLog('⚠️ CAPTURE FAILED', { reason: 'html2canvas not loaded' }, 'warn');
-            return null;
-        }
-
-        // Get the results content section (translations + expressions)
-        const resultsContent = document.querySelector('.results-content');
-        if (!resultsContent) {
-            debugLog('⚠️ CAPTURE FAILED', { reason: 'Results content not found' }, 'warn');
-            return null;
-        }
-
-        // Check if results section is visible
-        if (resultsSection && resultsSection.style.display === 'none') {
-            debugLog('⚠️ CAPTURE SKIPPED', { reason: 'Results section not visible' }, 'warn');
-            return null;
-        }
-
-        // Use html2canvas to capture the results content
-        const canvas = await window.html2canvas(resultsContent, {
-            backgroundColor: '#000000',
-            scale: 1,
-            logging: false,
-            useCORS: true,
-            allowTaint: false
-        });
-
-        // Convert canvas to base64 image data
-        const imageData = canvas.toDataURL('image/png');
-        
-        // Save image via Electron bridge
-        const result = await electronBridge.savePreviewImage(analysisId, imageData);
-        
-        if (result.success) {
-            debugLog('✅ PREVIEW CAPTURED', { 
-                analysisId, 
-                path: result.path 
-            }, 'success');
-            return result.path;
-        } else {
-            debugLog('❌ CAPTURE SAVE FAILED', { 
-                analysisId, 
-                error: result.error 
-            }, 'error');
-            return null;
-        }
-    } catch (error) {
-        debugLog('❌ CAPTURE ERROR', { 
-            analysisId, 
-            error: error.message 
-        }, 'error');
-        console.error('Error capturing preview:', error);
-        return null;
-    }
-}
-
     // Save analysis
     saveAnalysisBtn.addEventListener('click', async () => {
         debugLog('💾 MANUAL SAVE INITIATED', {
@@ -3524,19 +3475,6 @@ async function captureAnalysisPreview(analysisId) {
                         savedAnalysisId: savedAnalysis.id,
                         fileName: savedAnalysis.fileName
                     }, 'success');
-                    
-                    // Auto-capture preview image
-                    const thumbnailPath = await captureAnalysisPreview(savedAnalysis.id);
-                    if (thumbnailPath) {
-                        // Update saved analysis with thumbnail path
-                        savedAnalysis.thumbnailPath = thumbnailPath;
-                        // Update in the saved array
-                        const index = saved.findIndex(a => a.id === savedAnalysis.id);
-                        if (index !== -1) {
-                            saved[index].thumbnailPath = thumbnailPath;
-                            await saveAnalysesSafe(saved);
-                        }
-                    }
                     
                 await showWarningModal('Analysis saved successfully!');
                 } else {
@@ -4169,17 +4107,6 @@ function renderActiveSaves(activeItems) {
         const checkboxHtml = isEditMode ? 
             `<input type="checkbox" class="saved-item-checkbox" data-item-id="${escapeHtml(item.id)}">` : '';
         
-        // Add capture button HTML if in edit mode
-        const captureButtonHtml = isEditMode ? 
-            `<button class="saved-item-capture-btn" data-item-id="${escapeHtml(item.id)}" title="Capture Preview Image" type="button">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
-                </svg>
-                Capture Preview
-            </button>` : '';
-        
         // Format: File Name / Last Studied / Created
             savedItem.innerHTML = `
                 <div class="saved-item-content-wrapper">
@@ -4191,12 +4118,19 @@ function renderActiveSaves(activeItems) {
                                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
                                 </svg>
                             </button>
-                            <span class="saved-item-name">${escapeHtml(item.fileName)}</span>
+                            <span class="saved-item-name">
+                                ${escapeHtml(item.fileName)}
+                                <button class="saved-item-edit-btn" data-item-id="${escapeHtml(item.id)}" title="Edit File" type="button">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                    </svg>
+                                </button>
+                            </span>
                         <span class="saved-item-date-edited">${dateEditedStr}</span>
                         <span class="saved-item-date-created">${dateCreatedStr}</span>
                             <input type="text" class="saved-item-rename-input" value="${escapeHtml(item.fileName)}" data-item-id="${escapeHtml(item.id)}" style="display: none;">
                         </div>
-                        ${captureButtonHtml ? `<div class="saved-item-bottom-row">${captureButtonHtml}</div>` : ''}
                     </div>
                 </div>
             `;
@@ -4364,10 +4298,11 @@ function renderActiveSaves(activeItems) {
         // Add click handler - only if not in edit mode
         if (!isEditMode) {
             savedItem.addEventListener('click', async (e) => {
-                // Exclude clicks on rename input, name span, and favorite button (handled separately)
+                // Exclude clicks on rename input, name span, favorite button, and edit button (handled separately)
                 if (e.target.classList.contains('saved-item-rename-input') ||
                     e.target.classList.contains('saved-item-name') ||
-                    e.target.closest('.favorite-star-btn')) {
+                    e.target.closest('.favorite-star-btn') ||
+                    e.target.closest('.saved-item-edit-btn')) {
                     return;
                 }
                 await reopenAnalysis(item);
@@ -4417,53 +4352,255 @@ function renderActiveSaves(activeItems) {
             });
         }
         
-        // Add capture preview button click handler (only in edit mode)
-        if (isEditMode) {
-            const captureBtn = savedItem.querySelector('.saved-item-capture-btn');
-            if (captureBtn) {
-                captureBtn.addEventListener('click', async (e) => {
-                    e.stopPropagation(); // Prevent triggering the item click
-                    const itemId = captureBtn.dataset.itemId;
-                    
-                    // First, open the analysis to make results visible
-                    const saved = await fetchSavedAnalyses('capture-preview');
-                    const targetItem = saved.find(s => String(s.id) === String(itemId));
-                    
-                    if (!targetItem) {
-                        await showWarningModal('Analysis not found.');
-                        return;
-                    }
-                    
-                    // Temporarily show results section and load analysis
-                    const originalView = viewManager.getCurrentView();
-                    await reopenAnalysis(targetItem);
-                    
-                    // Wait for results to render
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    
-                    // Capture the preview
-                    const thumbnailPath = await captureAnalysisPreview(itemId);
-                    
-                    if (thumbnailPath) {
-                        // Update saved analysis with thumbnail path
-                        const index = saved.findIndex(s => String(s.id) === String(itemId));
-                        if (index !== -1) {
-                            saved[index].thumbnailPath = thumbnailPath;
-                            await saveAnalysesSafe(saved);
-                            await showWarningModal('Preview image captured successfully!');
-                        }
-                    } else {
-                        await showWarningModal('Failed to capture preview image. Please try again.');
-                    }
-                    
-                    // Return to saved analyses view
-                    viewManager.showSavedAnalyses();
-                    await loadSavedAnalyses();
-                });
-            }
+        // Add edit button click handler
+        const editBtn = savedItem.querySelector('.saved-item-edit-btn');
+        if (editBtn) {
+            editBtn.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent triggering the item click
+                const itemId = editBtn.dataset.itemId;
+                const saved = await fetchSavedAnalyses('edit-item');
+                const targetItem = saved.find(s => String(s.id) === String(itemId));
+                if (targetItem) {
+                    await showRenameUploadModal(targetItem);
+                }
+            });
         }
         
         activeSavesList.appendChild(savedItem);
+    });
+}
+
+// Show rename/upload modal
+async function showRenameUploadModal(item) {
+    return new Promise((resolve) => {
+        const renameUploadModal = document.getElementById('renameUploadModal');
+        const renameUploadInput = document.getElementById('renameUploadInput');
+        const imageUploadInput = document.getElementById('imageUploadInput');
+        const imageUploadBtn = document.getElementById('imageUploadBtn');
+        const imageRemoveBtn = document.getElementById('imageRemoveBtn');
+        const imagePreview = document.getElementById('imagePreview');
+        const imagePreviewPlaceholder = document.getElementById('imagePreviewPlaceholder');
+        const renameUploadCancel = document.getElementById('renameUploadCancel');
+        const renameUploadSave = document.getElementById('renameUploadSave');
+        
+        if (!renameUploadModal || !renameUploadInput || !imageUploadInput || 
+            !imageUploadBtn || !imageRemoveBtn || !imagePreview || 
+            !imagePreviewPlaceholder || !renameUploadCancel || !renameUploadSave) {
+            console.error('Rename/Upload modal elements not found');
+            resolve();
+            return;
+        }
+        
+        // Set initial values
+        renameUploadInput.value = item.fileName || '';
+        let selectedImageFile = null;
+        let imagePreviewUrl = null;
+        
+        // Load current thumbnail if exists
+        const loadCurrentThumbnail = async () => {
+            if (item.thumbnailPath) {
+                try {
+                    const result = await electronBridge.getThumbnailPath(item.id);
+                    if (result.success && result.exists) {
+                        const isWindows = navigator.platform.toLowerCase().includes('win');
+                        const fileUrl = isWindows 
+                            ? `file:///${result.path.replace(/\\/g, '/')}`
+                            : `file://${result.path}`;
+                        imagePreview.src = fileUrl;
+                        imagePreview.style.display = 'block';
+                        imagePreviewPlaceholder.style.display = 'none';
+                        imageRemoveBtn.style.display = 'block';
+                        imagePreviewUrl = fileUrl;
+                    } else {
+                        imagePreview.style.display = 'none';
+                        imagePreviewPlaceholder.style.display = 'flex';
+                        imageRemoveBtn.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error loading thumbnail:', error);
+                    imagePreview.style.display = 'none';
+                    imagePreviewPlaceholder.style.display = 'flex';
+                    imageRemoveBtn.style.display = 'none';
+                }
+            } else {
+                imagePreview.style.display = 'none';
+                imagePreviewPlaceholder.style.display = 'flex';
+                imageRemoveBtn.style.display = 'none';
+            }
+        };
+        
+        loadCurrentThumbnail();
+        
+        // Image upload button handler
+        const handleImageUpload = () => {
+            imageUploadInput.click();
+        };
+        
+        // Image file input change handler
+        const handleImageFileChange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                if (!file.type.startsWith('image/')) {
+                    showWarningModal('Please select an image file.');
+                    return;
+                }
+                selectedImageFile = file;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    imagePreviewUrl = event.target.result;
+                    imagePreview.src = imagePreviewUrl;
+                    imagePreview.style.display = 'block';
+                    imagePreviewPlaceholder.style.display = 'none';
+                    imageRemoveBtn.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        };
+        
+        // Remove image handler
+        const handleRemoveImage = () => {
+            selectedImageFile = null;
+            imagePreviewUrl = null;
+            imagePreview.src = '';
+            imagePreview.style.display = 'none';
+            imagePreviewPlaceholder.style.display = 'flex';
+            imageRemoveBtn.style.display = 'none';
+            imageUploadInput.value = '';
+        };
+        
+        // Cancel handler
+        const handleCancel = () => {
+            renameUploadModal.style.display = 'none';
+            document.removeEventListener('keydown', handleEscape);
+            // Clean up preview URL if it was created from file
+            if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
+                URL.revokeObjectURL(imagePreviewUrl);
+            }
+            resolve();
+        };
+        
+        // Save handler
+        const handleSave = async () => {
+            const newName = renameUploadInput.value.trim();
+            
+            if (!newName) {
+                await showWarningModal('File name cannot be empty.');
+                return;
+            }
+            
+            // Validate filename
+            const validationResult = validateFileName(newName);
+            if (!validationResult.valid) {
+                await showWarningModal(validationResult.error);
+                return;
+            }
+            
+            const sanitizedName = validationResult.sanitized;
+            
+            try {
+                // Load saved analyses
+                let saved = await fetchSavedAnalyses('save-rename-upload');
+                const index = saved.findIndex(s => String(s.id) === String(item.id));
+                
+                if (index === -1) {
+                    await showWarningModal('Analysis not found.');
+                    return;
+                }
+                
+                // Update file name
+                if (sanitizedName !== item.fileName) {
+                    saved[index].fileName = sanitizedName;
+                    saved[index].dateEdited = new Date().toISOString();
+                }
+                
+                // Handle image upload
+                if (selectedImageFile) {
+                    // Convert file to base64
+                    const reader = new FileReader();
+                    reader.onload = async (event) => {
+                        const imageData = event.target.result;
+                        const result = await electronBridge.savePreviewImage(item.id, imageData);
+                        if (result.success) {
+                            saved[index].thumbnailPath = result.path;
+                            await saveAnalysesSafe(saved);
+                            await loadSavedAnalyses();
+                            renameUploadModal.style.display = 'none';
+                            document.removeEventListener('keydown', handleEscape);
+                            if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
+                                URL.revokeObjectURL(imagePreviewUrl);
+                            }
+                            await showWarningModal('File updated successfully!');
+                            resolve();
+                        } else {
+                            await showWarningModal('Failed to save image: ' + result.error);
+                        }
+                    };
+                    reader.onerror = async () => {
+                        await showWarningModal('Failed to read image file.');
+                    };
+                    reader.readAsDataURL(selectedImageFile);
+                } else if (imagePreviewUrl === null) {
+                    // Image was removed
+                    saved[index].thumbnailPath = null;
+                    await saveAnalysesSafe(saved);
+                    await loadSavedAnalyses();
+                    renameUploadModal.style.display = 'none';
+                    document.removeEventListener('keydown', handleEscape);
+                    await showWarningModal('File updated successfully!');
+                    resolve();
+                } else {
+                    // Only name changed, no image change
+                    await saveAnalysesSafe(saved);
+                    await loadSavedAnalyses();
+                    renameUploadModal.style.display = 'none';
+                    document.removeEventListener('keydown', handleEscape);
+                    if (imagePreviewUrl && imagePreviewUrl.startsWith('data:')) {
+                        URL.revokeObjectURL(imagePreviewUrl);
+                    }
+                    await showWarningModal('File updated successfully!');
+                    resolve();
+                }
+            } catch (error) {
+                console.error('Error saving rename/upload:', error);
+                await showWarningModal('Error updating file: ' + error.message);
+            }
+        };
+        
+        // Escape key handler
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                handleCancel();
+            }
+        };
+        
+        // Remove existing listeners by cloning buttons
+        const newImageUploadBtn = imageUploadBtn.cloneNode(true);
+        imageUploadBtn.parentNode.replaceChild(newImageUploadBtn, imageUploadBtn);
+        
+        const newImageRemoveBtn = imageRemoveBtn.cloneNode(true);
+        imageRemoveBtn.parentNode.replaceChild(newImageRemoveBtn, imageRemoveBtn);
+        
+        const newCancelBtn = renameUploadCancel.cloneNode(true);
+        renameUploadCancel.parentNode.replaceChild(newCancelBtn, renameUploadCancel);
+        
+        const newSaveBtn = renameUploadSave.cloneNode(true);
+        renameUploadSave.parentNode.replaceChild(newSaveBtn, renameUploadSave);
+        
+        const newImageInput = imageUploadInput.cloneNode(true);
+        imageUploadInput.parentNode.replaceChild(newImageInput, imageUploadInput);
+        
+        // Add event listeners
+        newImageUploadBtn.addEventListener('click', handleImageUpload);
+        newImageRemoveBtn.addEventListener('click', handleRemoveImage);
+        newCancelBtn.addEventListener('click', handleCancel);
+        newSaveBtn.addEventListener('click', handleSave);
+        newImageInput.addEventListener('change', handleImageFileChange);
+        document.addEventListener('keydown', handleEscape);
+        
+        // Show modal
+        renameUploadModal.style.display = 'flex';
+        renameUploadInput.focus();
+        renameUploadInput.select();
     });
 }
 
@@ -4529,6 +4666,12 @@ async function renderActiveSavesAsCards(activeItems) {
         card.innerHTML = `
             ${thumbnailHtml}
             ${placeholderHtml}
+            <button class="saved-card-edit-btn" data-item-id="${escapeHtml(item.id)}" title="Edit File" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+            </button>
             <div class="saved-card-content">
                 <div class="saved-card-header">
                     <div class="saved-card-name">${escapeHtml(item.fileName)}</div>
@@ -4553,8 +4696,8 @@ async function renderActiveSavesAsCards(activeItems) {
         
         // Add click handler to open analysis
         card.addEventListener('click', async (e) => {
-            // Exclude clicks on favorite button
-            if (e.target.closest('.saved-card-favorite')) {
+            // Exclude clicks on favorite button and edit button
+            if (e.target.closest('.saved-card-favorite') || e.target.closest('.saved-card-edit-btn')) {
                 return;
             }
             await reopenAnalysis(item);
@@ -4577,6 +4720,20 @@ async function renderActiveSavesAsCards(activeItems) {
                     }
                 } catch (error) {
                     console.error('Error toggling favorite:', error);
+                }
+            });
+        }
+        
+        // Add edit button click handler
+        const cardEditBtn = card.querySelector('.saved-card-edit-btn');
+        if (cardEditBtn) {
+            cardEditBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const itemId = cardEditBtn.dataset.itemId;
+                const saved = await fetchSavedAnalyses('edit-card-item');
+                const targetItem = saved.find(s => String(s.id) === String(itemId));
+                if (targetItem) {
+                    await showRenameUploadModal(targetItem);
                 }
             });
         }

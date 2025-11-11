@@ -908,6 +908,42 @@ body.theme-purple {
     pointer-events: auto;
 }
 
+.saved-card-edit-btn {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: all 0.2s;
+    opacity: 0;
+    z-index: 10;
+    backdrop-filter: blur(4px);
+}
+
+.saved-card:hover .saved-card-edit-btn {
+    opacity: 1;
+}
+
+.saved-card-edit-btn:hover {
+    background: rgba(255, 102, 0, 0.9);
+    border-color: var(--accent-color);
+    color: #000;
+    transform: translateX(-50%) scale(1.05);
+}
+
+.saved-card-edit-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
 .saved-card-header {
     display: flex;
     justify-content: space-between;
@@ -1072,6 +1108,37 @@ body.theme-purple {
     box-sizing: border-box;
     text-align: left;
     grid-column: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.saved-item-edit-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+}
+
+.saved-item:hover .saved-item-edit-btn {
+    opacity: 1;
+}
+
+.saved-item-edit-btn:hover {
+    color: var(--accent-color);
+}
+
+.saved-item-edit-btn svg {
+    width: 16px;
+    height: 16px;
 }
 
 .saved-item-status {
@@ -1252,27 +1319,6 @@ body.theme-purple {
     margin-top: 8px;
     padding-top: 8px;
     border-top: 1px solid var(--border-color);
-}
-
-.saved-item-capture-btn {
-    background-color: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 6px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-weight: 500;
-}
-
-.saved-item-capture-btn:hover {
-    background-color: var(--bg-quaternary);
-    border-color: var(--accent-color);
-    color: var(--accent-color);
 }
 
 .saved-item-rename-btn {
@@ -1808,6 +1854,90 @@ body.theme-purple .add-to-list-btn:hover {
 .custom-modal-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Rename/Upload Modal Styles */
+.rename-upload-modal-content {
+    min-width: 500px;
+    max-width: 600px;
+}
+
+.rename-upload-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.rename-upload-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.rename-upload-label {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.image-upload-area {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.image-preview-container {
+    width: 100%;
+    height: 200px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.image-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.image-preview-placeholder {
+    color: var(--text-tertiary);
+    font-size: 14px;
+}
+
+.image-upload-btn,
+.image-remove-btn {
+    padding: 10px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.image-upload-btn:hover {
+    background-color: var(--bg-quaternary);
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.image-remove-btn {
+    background-color: #dc3545;
+    border-color: #dc3545;
+    color: #fff;
+}
+
+.image-remove-btn:hover {
+    background-color: #c82333;
+    border-color: #c82333;
 }
 
 .study-timestamp-section {

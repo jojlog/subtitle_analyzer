@@ -326,6 +326,37 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Rename/Upload Modal -->
+            <div id="renameUploadModal" class="custom-modal">
+                <div class="custom-modal-content rename-upload-modal-content">
+                    <div class="custom-modal-header">
+                        <h3>Edit File</h3>
+                    </div>
+                    <div class="custom-modal-body rename-upload-modal-body">
+                        <div class="rename-upload-section">
+                            <label for="renameUploadInput" class="rename-upload-label">File Name</label>
+                            <input type="text" id="renameUploadInput" class="custom-modal-input" placeholder="Enter new filename">
+                        </div>
+                        <div class="rename-upload-section">
+                            <label class="rename-upload-label">Preview Image</label>
+                            <div class="image-upload-area">
+                                <div id="imagePreviewContainer" class="image-preview-container">
+                                    <img id="imagePreview" class="image-preview" alt="Preview" style="display: none;">
+                                    <div id="imagePreviewPlaceholder" class="image-preview-placeholder">No image</div>
+                                </div>
+                                <input type="file" id="imageUploadInput" accept="image/*" style="display: none;">
+                                <button id="imageUploadBtn" class="image-upload-btn" type="button">Choose Image</button>
+                                <button id="imageRemoveBtn" class="image-remove-btn" type="button" style="display: none;">Remove Image</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="custom-modal-footer">
+                        <button id="renameUploadCancel" class="custom-modal-btn custom-modal-btn-cancel">Cancel</button>
+                        <button id="renameUploadSave" class="custom-modal-btn custom-modal-btn-confirm">Save</button>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
     <script type="module" src="renderer.js"></script>

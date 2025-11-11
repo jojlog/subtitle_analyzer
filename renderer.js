@@ -7329,13 +7329,69 @@ function setupStudyModalResizers() {
     });
 }
 
+// Update chat messages padding to account for input container
+function updateChatMessagesPadding() {
+    const studyChatMessages = document.getElementById('studyChatMessages');
+    const studyChatInputContainer = document.querySelector('.study-chat-input-container');
+    
+    if (studyChatMessages && studyChatInputContainer) {
+        // Use getBoundingClientRect to get accurate height including padding
+        const inputContainerRect = studyChatInputContainer.getBoundingClientRect();
+        const inputContainerHeight = inputContainerRect.height;
+        
+        if (inputContainerHeight > 0) {
+            // Set padding-bottom to match input container height + extra space for safety
+            // Use a minimum of 100px to ensure enough space
+            const paddingBottom = Math.max(inputContainerHeight + 30, 100);
+            studyChatMessages.style.paddingBottom = `${paddingBottom}px`;
+            
+            // Force a scroll to bottom to ensure latest messages are visible
+            requestAnimationFrame(() => {
+                studyChatMessages.scrollTop = studyChatMessages.scrollHeight;
+            });
+        }
+    }
+}
+
+// Setup resize observer for input container to update padding dynamically
+let inputContainerResizeObserver = null;
+function setupInputContainerResizeObserver() {
+    const studyChatInputContainer = document.querySelector('.study-chat-input-container');
+    const studyChatMessages = document.getElementById('studyChatMessages');
+    
+    if (inputContainerResizeObserver) {
+        inputContainerResizeObserver.disconnect();
+    }
+    
+    if (studyChatInputContainer && studyChatMessages) {
+        inputContainerResizeObserver = new ResizeObserver(() => {
+            updateChatMessagesPadding();
+        });
+        inputContainerResizeObserver.observe(studyChatInputContainer);
+    }
+}
+
 // Restore study modal section heights from localStorage
 function restoreStudyModalHeights() {
     const studyExpressionsSection = document.getElementById('studyExpressionsSection');
     const studyChatMessages = document.getElementById('studyChatMessages');
+    const studyChatInputContainer = document.querySelector('.study-chat-input-container');
     const studyModalContent = document.querySelector('.study-modal-content');
     
+    // Calculate input container height for padding
+    let inputContainerHeight = 100; // Default fallback
+    if (studyChatInputContainer) {
+        // Get initial height estimate
+        const rect = studyChatInputContainer.getBoundingClientRect();
+        if (rect.height > 0) {
+            inputContainerHeight = rect.height + 30;
+        }
+    }
+    
     if (studyChatMessages) {
+        // Set padding-bottom to account for input container
+        studyChatMessages.style.paddingBottom = `${inputContainerHeight}px`;
+        
         const savedHeight = localStorage.getItem('studyChatMessagesHeight');
         if (savedHeight) {
             studyChatMessages.style.height = savedHeight + 'px';
@@ -7600,9 +7656,17 @@ You MUST use this exact format for ALL responses. Use tab indentation for the nu
     studyModal.style.display = 'flex';
     
     // Restore saved section heights after modal is visible
-    // Use requestAnimationFrame to ensure modal is rendered before calculating heights
+    // Use double requestAnimationFrame to ensure modal is fully rendered before calculating heights
     requestAnimationFrame(() => {
-        restoreStudyModalHeights();
+        requestAnimationFrame(() => {
+            restoreStudyModalHeights();
+            // Recalculate padding after a short delay to ensure input container is fully rendered
+            setTimeout(() => {
+                updateChatMessagesPadding();
+                // Setup resize observer to update padding when input container size changes
+                setupInputContainerResizeObserver();
+            }, 100);
+        });
     });
     
     // Update navigation button states

@@ -2259,7 +2259,7 @@ body.theme-purple .add-to-list-btn:hover {
     min-height: 0;
     overflow-y: auto;
     padding: 16px;
-    padding-bottom: 80px;
+    padding-bottom: 100px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -2377,7 +2377,7 @@ body.theme-purple .add-to-list-btn:hover {
     min-height: 0;
     overflow-y: auto;
     padding: 16px;
-    padding-bottom: 80px;
+    padding-bottom: 100px;
     display: flex;
     flex-direction: column;
     gap: 16px;
